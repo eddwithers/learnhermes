@@ -1,0 +1,97 @@
+# LearnHermes dispatch catalogue.
+# Every dispatch is grounded in the official docs. Completion is verified by
+# the observer from real state — never self-reported.
+# Order = the default journey for a brand-new user. The timing engine adapts
+# pace; struggle signals will re-order in a later version.
+
+dispatches:
+  - id: first_chat
+    n: 1
+    title: "You're here"
+    milestone: first_chat
+    why: >
+      Hermes is running and you've had your first conversation. That's the
+      hardest step done. Everything from here is building on a working base.
+    starter_prompt: "What can you help me with? Give me three things worth trying first."
+    docs_url: "https://hermes-agent.nousresearch.com/docs/getting-started/quickstart"
+
+  - id: memory
+    n: 2
+    title: "Tell Hermes about you"
+    milestone: memory
+    why: >
+      Hermes remembers across sessions. Tell it your name, what you do, and
+      how you like to work — it writes these to memory and every future
+      session starts knowing you. This is the difference between a chatbot
+      and a assistant that accumulates context.
+    starter_prompt: "Remember this about me: [your name, role, and one preference for how you like answers]."
+    docs_url: "https://hermes-agent.nousresearch.com/docs/user-guide/features/memory"
+
+  - id: first_tool
+    n: 3
+    title: "Give it real work"
+    milestone: first_tool
+    why: >
+      Hermes isn't just chat — it has tools: a terminal, file editing, web
+      search. Ask it to do something real on your machine and watch it work.
+      Start small and read-only so you can see what it does before it does it.
+    starter_prompt: "Look at the files in my home directory and tell me what's taking up the most space."
+    docs_url: "https://hermes-agent.nousresearch.com/docs/user-guide/features/tools"
+
+  - id: first_cron
+    n: 4
+    title: "Tame the scheduler"
+    milestone: first_cron
+    why: >
+      Cron jobs let Hermes work while you're away — a morning summary, a
+      periodic check, a reminder. One sentence schedules it. This is where
+      Hermes stops being something you talk to and starts being something
+      that works for you.
+    starter_prompt: "Set up a cron job that sends me a one-line summary of tomorrow's weather every morning at 8am."
+    docs_url: "https://hermes-agent.nousresearch.com/docs/user-guide/features/cron"
+
+  - id: first_skill
+    n: 5
+    title: "Teach it a trick"
+    milestone: first_skill
+    why: >
+      When Hermes solves something hard, it can save the procedure as a
+      skill — reusable knowledge that loads in future sessions. Ask it to
+      remember how it did something, and watch your agent get better at
+      your specific work over time.
+    starter_prompt: "That worked well. Save what you just did as a skill so you can do it again next time."
+    docs_url: "https://hermes-agent.nousresearch.com/docs/user-guide/features/skills"
+
+  - id: gateway
+    n: 6
+    title: "Take it with you"
+    milestone: gateway
+    why: >
+      The gateway connects Hermes to messaging platforms — Telegram,
+      Discord, Slack and more. Same agent, same memory, from your phone.
+      Set up one platform and Hermes goes where you go.
+    starter_prompt: "Help me connect Hermes to Telegram so I can chat with you from my phone."
+    docs_url: "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/"
+
+  - id: delegation
+    n: 7
+    title: "Send a delegate"
+    milestone: delegation
+    why: >
+      Hermes can spawn subagents — isolated workers that run tasks in
+      parallel and report back. Give it two independent jobs at once and
+      watch it divide the work. This is how big tasks stay fast.
+    starter_prompt: "Research two topics in parallel using subagents: [topic A] and [topic B]. Summarise both when done."
+    docs_url: "https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation"
+
+  - id: second_profile
+    n: 8
+    title: "A second self"
+    milestone: second_profile
+    why: >
+      Profiles are independent Hermes instances — separate memory, skills,
+      config and channels. One for personal life, one for work, one for a
+      project. They never leak into each other. Create a second profile and
+      give it a job of its own.
+    starter_prompt: "Create a new Hermes profile called 'work' and explain how I switch between them."
+    docs_url: "https://hermes-agent.nousresearch.com/docs/user-guide/profiles"

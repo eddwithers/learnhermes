@@ -1,0 +1,16 @@
+name: learnhermes
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+description: "LearnHermes — a companion for the Hermes journey. Watches your real setup, verifies milestones from evidence, and sends timed dispatches (lessons) to a channel you choose, with a dashboard for the full journey. Brand-new users first."
+author: Edd Coates-Withers
+license: MIT
+tags: [learning, onboarding, dashboard, notifications]
+provides_tools:
+  - learnhermes_journey
+provides_hooks:
+  - on_session_start
+  - on_session_end
+  - post_tool_call
+  - api_request_error
+  - pre_llm_call
