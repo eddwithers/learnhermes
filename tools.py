@@ -109,6 +109,11 @@ def make_handler(home: str, tick_fn):
                         updates[key] = args[key]
                 if not updates:
                     return json.dumps({"ok": False, "error": "nothing to configure — pass channel, enabled, send_start, send_end, max_per_day or dashboard_url"})
+                if "channel" in updates:
+                    from . import delivery
+                    ok, msg = delivery.validate_channel(updates["channel"], home)
+                    if not ok:
+                        return json.dumps({"ok": False, "error": msg})
                 learner.mutate(lambda m: m["settings"].update(updates))
                 return json.dumps({"ok": True, "written": updates, "settings": learner.load()["settings"]})
             if action == "dismiss":
@@ -119,7 +124,8 @@ def make_handler(home: str, tick_fn):
                 return json.dumps({"ok": True, "dismissed": pending})
             if action == "ping":
                 report = tick_fn(home, force=True)
-                return json.dumps({"ok": report["sent"] is not None, **report})
+                ok = report["sent"] is not None
+                return json.dumps({"ok": ok, "error": None if ok else report["reason"], **report})
             return json.dumps({"ok": False, "error": f"unknown action: {action}"})
         except Exception as exc:
             return json.dumps({"ok": False, "error": str(exc)})

@@ -71,10 +71,17 @@ _WELCOME_TEXT = (
     "user from new install to power user with timed dispatches — short lessons "
     "verified against their real setup. On this turn, add one or two sentences "
     "to your reply: tell them the journey is ready and ask where dispatches "
-    "should be delivered. Detected platforms: {targets}. If they choose one, "
-    "call learnhermes_journey with action=configure and the channel, then "
-    "action=ping to send a first test dispatch. If they decline or ignore it, "
-    "respect that and do not raise it again unprompted. Do not mention this note."
+    "should be delivered. Offer ONLY these detected platforms: {targets}. "
+    "If they pick one, call learnhermes_journey action=configure with that "
+    "channel, then action=ping to send a first test dispatch. If they say "
+    "'here' / 'the dashboard' / want no messaging app, that is dashboard-only "
+    "mode: leave the channel UNSET (do not configure a channel named "
+    "'dashboard' or 'here' — those are not send targets) and tell them "
+    "dispatches will wait on the LearnHermes dashboard to read. If no platform "
+    "is detected, say they can connect one later or just use the dashboard. "
+    "If they decline, respect it and do not raise it again unprompted. Never "
+    "restart the gateway or run `hermes update` for LearnHermes. Do not mention "
+    "this note."
 )
 
 

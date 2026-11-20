@@ -47,10 +47,32 @@ reachable from the user's phone for ping links to work there).
 ## Starting the journey
 
 On the first chat after install, a one-time welcome note asks you to offer
-setup. Ask where dispatches should go (offer the detected platforms), then
-`configure` the channel and `ping` a first test dispatch. If the user
-declines, respect it — the journey stays available on the dashboard and via
-`/dispatches`, and you should not bring it up again unprompted.
+setup. Offer ONLY the detected platforms (from `action=status`
+`detected_platforms`). If the user picks one, `configure` that channel and
+`ping` a first test dispatch.
+
+If the user says "here", "the dashboard", or wants no messaging app, that is
+**dashboard-only mode**: leave the channel UNSET. Do NOT configure a channel
+named `dashboard`, `here`, or similar — those are not `hermes send` targets
+and can never deliver. Tell them dispatches will wait on the LearnHermes
+dashboard to read, and they can connect a platform later for push delivery.
+
+If the user declines, respect it — the journey stays available on the
+dashboard and via `/dispatches`, and you should not bring it up again
+unprompted.
+
+## Delivery failures — never restart the gateway
+
+A failed ping is a **channel problem**, not a gateway or install problem.
+`configure` now rejects channels that are not connected platforms on this
+profile, and delivery errors are cleaned of unrelated Hermes update warnings.
+
+If a ping fails: read the returned `error`/`reason`, fix the channel (connect
+a platform, or switch to dashboard-only), and retry. **Never** run
+`hermes gateway restart`, `hermes update`, or any install/service command to
+"fix" LearnHermes delivery — those affect every profile on the machine and are
+never the remedy for a dispatch that won't send. If the error mentions an
+update or gateway restart, ignore that noise; it is not a delivery instruction.
 
 ## Answering journey questions
 

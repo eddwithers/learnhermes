@@ -463,7 +463,8 @@ def test_send_now_surfaces_reason_as_error(lh, home, monkeypatch):
     assert out["ok"] is True and out["error"] is None
 
 
-def test_tool_configure_validates(lh, home):
+def test_tool_configure_validates(lh, home, monkeypatch):
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
     handler = lh.tools.make_handler(str(home), lh._tick)
     out = json.loads(handler({"action": "configure", "channel": "telegram"}))
     assert out["ok"] and lh.learner.load()["settings"]["channel"] == "telegram"
@@ -471,6 +472,45 @@ def test_tool_configure_validates(lh, home):
     assert not bad["ok"]
     empty = json.loads(handler({"action": "configure"}))
     assert not empty["ok"]
+
+
+def test_clean_detail_strips_update_noise(lh):
+    raw = (
+        "hermes: source-update completion failed: an update is still running\n"
+        "⚠ A previous `hermes update` pulled new code but did not restart running gateways.\n"
+        "  Run `hermes update` or `hermes gateway restart`.\n"
+        "hermes send: Unknown or unregistered plugin platform: dashboard"
+    )
+    out = lh.delivery._clean_detail(raw)
+    assert "Unknown or unregistered plugin platform: dashboard" in out
+    assert "hermes update" not in out.lower()
+    assert "gateway restart" not in out.lower()
+
+
+def test_validate_channel_rejects_invented_target(lh, home, monkeypatch):
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram", "discord"])
+    ok, msg = lh.delivery.validate_channel("dashboard", str(home))
+    assert not ok and "not a connected delivery platform" in msg
+    ok, msg = lh.delivery.validate_channel("here", str(home))
+    assert not ok
+    assert lh.delivery.validate_channel("telegram", str(home))[0]
+    assert lh.delivery.validate_channel("discord:#ops", str(home))[0]
+    assert lh.delivery.validate_channel("", str(home))[0]  # dashboard-only
+
+
+def test_validate_channel_no_platforms_connected(lh, home, monkeypatch):
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: [])
+    ok, msg = lh.delivery.validate_channel("telegram", str(home))
+    assert not ok and "No delivery platform is connected" in msg
+    assert lh.delivery.validate_channel("", str(home))[0]
+
+
+def test_configure_rejects_unconnected_channel(lh, home, monkeypatch):
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    handler = lh.tools.make_handler(str(home), lh._tick)
+    out = json.loads(handler({"action": "configure", "channel": "dashboard"}))
+    assert not out["ok"]
+    assert lh.learner.load()["settings"]["channel"] == ""  # unchanged
 
 
 def test_tool_dismiss_requires_open(lh, home):

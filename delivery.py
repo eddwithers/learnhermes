@@ -68,6 +68,55 @@ def _outbox_append(record: dict) -> None:
         f.write(json.dumps(record) + "\n")
 
 
+# Hermes CLI infrastructure warnings that are NOT delivery errors. They must
+# never be surfaced as the reason a ping failed — doing so sends the agent
+# chasing gateway restarts / updates instead of fixing the channel.
+_INFRA_NOISE = (
+    "hermes update",
+    "update is still running",
+    "did not restart running gateways",
+    "pre-update modules",
+    "source-update completion",
+    "gateway restart",
+    "relaunch hermes",
+    "previous dependencies",
+    "completing source-update",
+    "preparing dependencies",
+)
+
+
+def _clean_detail(raw: str) -> str:
+    lines = [
+        ln for ln in (raw or "").splitlines()
+        if ln.strip() and not any(n in ln.lower() for n in _INFRA_NOISE)
+    ]
+    return "\n".join(lines).strip()[:300]
+
+
+def validate_channel(channel: str, home: str) -> tuple[bool, str]:
+    """A channel must be a real, connected `hermes send` platform on THIS
+    profile. Empty = dashboard-only mode (valid). Prevents invented targets
+    like 'dashboard' or 'here' that can never deliver."""
+    channel = (channel or "").strip()
+    if not channel:
+        return True, ""
+    platform = channel.split(":")[0].strip().lower()
+    detected = list_targets(home)
+    if not detected:
+        return False, (
+            "No delivery platform is connected on this profile yet, so pings can't be sent. "
+            "Connect one first (e.g. `hermes gateway setup`), or leave the channel unset for "
+            "dashboard-only mode — dispatches then wait on the dashboard to be read."
+        )
+    if platform not in detected:
+        return False, (
+            f"'{platform}' is not a connected delivery platform on this profile. "
+            f"Detected: {', '.join(detected)}. Use one of those, or leave the channel unset "
+            "for dashboard-only mode. The dashboard is a place to read dispatches, not a send target."
+        )
+    return True, ""
+
+
 def send(channel: str, text: str, home: str, dispatch_id: str) -> tuple[bool, str]:
     """Send via hermes send. Always records to the outbox, send or no send."""
     env = {**os.environ, "HERMES_HOME": str(home)}
@@ -85,7 +134,9 @@ def send(channel: str, text: str, home: str, dispatch_id: str) -> tuple[bool, st
             env=env, capture_output=True, text=True, timeout=45,
         )
         record["delivered"] = proc.returncode == 0
-        record["detail"] = (proc.stderr or proc.stdout or "").strip()[:300]
+        record["detail"] = _clean_detail(proc.stderr or proc.stdout or "")
+        if not record["delivered"] and not record["detail"]:
+            record["detail"] = "delivery failed (no specific error returned)"
     except (subprocess.TimeoutExpired, OSError) as exc:
         record["detail"] = str(exc)[:300]
     _outbox_append(record)
