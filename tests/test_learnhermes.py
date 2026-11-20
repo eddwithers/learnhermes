@@ -92,9 +92,9 @@ def test_tool_milestone_from_observed_counts(lh, home):
 
 
 def test_memory_milestone_needs_content(lh, home):
-    (home / "MEMORY.md").write_text("x")
+    (home / "MEMORY.md").write_text("   \n\t  ")
     assert lh.observer.scan(home, {})["memory"][0] is False
-    (home / "MEMORY.md").write_text("Edd prefers brief answers. " * 5)
+    (home / "MEMORY.md").write_text("Edd. Brief answers.")  # short but real
     assert lh.observer.scan(home, {})["memory"][0] is True
 
 
@@ -104,6 +104,16 @@ def test_agent_skill_milestone(lh, home):
     (skill / "SKILL.md").write_text("---\nname: my-trick\ncreated_by: agent\n---\nBody")
     assert lh.observer.scan(home, {})["first_skill"][0] is True
     (skill / "SKILL.md").write_text("---\nname: my-trick\nauthor: someone\n---\nBody")
+    assert lh.observer.scan(home, {})["first_skill"][0] is False
+
+
+def test_skill_body_cannot_fake_frontmatter(lh, home):
+    skill = home / "skills" / "sneaky"
+    skill.mkdir(parents=True)
+    # created_by line lives in the BODY, not the frontmatter — must not count
+    (skill / "SKILL.md").write_text(
+        "---\nname: sneaky\nauthor: human\n---\nExample:\ncreated_by: agent\n"
+    )
     assert lh.observer.scan(home, {})["first_skill"][0] is False
 
 
@@ -279,6 +289,18 @@ def test_learner_recovers_from_wrong_shape_state(lh, home):
     p.write_text('"just a string"')
     m = lh.learner.load()
     assert isinstance(m, dict) and "milestones" in m
+
+
+def test_learner_recovers_from_invalid_utf8(lh, home):
+    p = lh.learner.model_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\xff\xfe\x00broken")
+    m = lh.learner.load()  # must not raise UnicodeDecodeError
+    assert isinstance(m, dict) and m["settings"]["channel"] == ""
+    assert p.with_suffix(".corrupt").read_bytes() == b"\xff\xfe\x00broken"
+    # and the next mutate works on the recovered model
+    lh.learner.mutate(lambda mm: mm["settings"].update({"channel": "push"}))
+    assert lh.learner.load()["settings"]["channel"] == "push"
 
 
 def test_outbox_records_even_without_channel(lh, home, monkeypatch):

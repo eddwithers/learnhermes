@@ -96,9 +96,10 @@ hermes plugins doctor . --ci       # real discovery + register(ctx)
 scripts/run_tests.sh /absolute/path/to/learnhermes/tests -q
 ```
 
-40 deterministic behaviour tests: milestone evidence, timing rules, send
-window wraparound, settings migration, delivery outbox, snapshot escaping,
-profile-scoped links, the conversational tool, one-time welcome.
+45 deterministic behaviour tests: milestone evidence, timing rules, send
+window wraparound, settings migration, state recovery (bad JSON, wrong
+shape, invalid UTF-8), delivery outbox, snapshot escaping, profile-scoped
+links, the conversational tool, one-time welcome and its automation gates.
 
 ## Roadmap
 

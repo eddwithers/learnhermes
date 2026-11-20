@@ -8,7 +8,6 @@ passed in (captured at register time, never os.environ at call time).
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 import time
 from pathlib import Path
@@ -45,17 +44,29 @@ def _cron_job_count(home: Path) -> int:
 
 
 def _agent_skill_count(home: Path) -> int:
-    """Skills the agent wrote (created_by: agent frontmatter), depth <= 2."""
+    """Skills the agent wrote: top-level created_by: agent in the YAML
+    frontmatter only — a body line that looks like frontmatter never counts."""
+    from ruamel.yaml import YAML
+
     root = home / "skills"
     if not root.is_dir():
         return 0
     count = 0
     for md in list(root.glob("*/SKILL.md")) + list(root.glob("*/*/SKILL.md")):
         try:
-            head = md.read_text(encoding="utf-8", errors="replace")[:2000]
+            text = md.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if re.search(r"^created_by:\s*['\"]?agent", head, re.MULTILINE):
+        if not text.startswith("---"):
+            continue
+        end = text.find("\n---", 3)
+        if end == -1:
+            continue
+        try:
+            fm = YAML(typ="safe").load(text[3:end])
+        except Exception:
+            continue
+        if isinstance(fm, dict) and fm.get("created_by") == "agent":
             count += 1
     return count
 
@@ -63,8 +74,11 @@ def _agent_skill_count(home: Path) -> int:
 def _memory_written(home: Path) -> bool:
     for name in ("MEMORY.md", "USER.md"):
         p = home / name
-        if p.exists() and p.stat().st_size > 50:
-            return True
+        try:
+            if p.exists() and p.read_text(encoding="utf-8", errors="replace").strip():
+                return True
+        except OSError:
+            continue
     return False
 
 

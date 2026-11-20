@@ -18,7 +18,7 @@ readme: true
 screenshots: []   # add dashboard + snapshot screenshots from the tested commit before submission
 platforms: [linux, macos]
 known_issues:
-  - "Windows not yet claimed: inter-process state locking uses flock (POSIX); on Windows the fallback is in-process only, so concurrent writers could race. Test and harden before adding windows."
+  - "Windows not yet claimed: inter-process state locking now has an msvcrt path (no silent unlocked writes), but it has not been tested on Windows. Test and harden before adding windows to platforms."
 capabilities:
   provides_tools:
     - learnhermes_journey

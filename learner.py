@@ -19,6 +19,10 @@ try:
     import fcntl
 except ImportError:  # Windows
     fcntl = None
+try:
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None
 
 _LOCK = threading.RLock()
 
@@ -54,14 +58,18 @@ def _read() -> dict:
         m["created_at"] = time.time()
         return m
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        # Malformed state is preserved beside the file, never silently reset.
-        p.with_suffix(".corrupt").write_bytes(p.read_bytes())
+        raw = p.read_bytes()
+    except OSError:
+        return copy.deepcopy(DEFAULT_MODEL)  # unreadable: can't quarantine what we can't read
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        # Bad JSON or invalid UTF-8: preserve beside the file, never crash.
+        p.with_suffix(".corrupt").write_bytes(raw)
         return copy.deepcopy(DEFAULT_MODEL)
     if not isinstance(data, dict):
         # Parseable but wrong shape (e.g. a JSON list) — same recovery path.
-        p.with_suffix(".corrupt").write_bytes(p.read_bytes())
+        p.with_suffix(".corrupt").write_bytes(raw)
         return copy.deepcopy(DEFAULT_MODEL)
     base = copy.deepcopy(DEFAULT_MODEL)
     base.update(data)
@@ -87,22 +95,43 @@ def load() -> dict:
         return _read()
 
 
+def _lock(fh) -> None:
+    if fcntl is not None:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+    elif msvcrt is not None:
+        # LK_LOCK retries ~10x1s internally; three rounds ≈ 30s max wait.
+        fh.seek(0)
+        for _ in range(3):
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                continue
+        raise OSError("learnhermes: could not acquire state lock")
+
+
+def _unlock(fh) -> None:
+    if fcntl is not None:
+        fcntl.flock(fh, fcntl.LOCK_UN)
+    elif msvcrt is not None:
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def mutate(fn) -> dict:
     """Read-modify-write under the inter-process lock. fn(model) edits in place."""
     with _LOCK:
         lock_path = model_path().with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = open(lock_path, "a")
+        fh = open(lock_path, "a+")
         try:
-            if fcntl is not None:
-                fcntl.flock(fh, fcntl.LOCK_EX)
+            _lock(fh)
             model = _read()
             fn(model)
             _write(model)
             return model
         finally:
-            if fcntl is not None:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+            _unlock(fh)
             fh.close()
 
 
