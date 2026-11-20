@@ -255,6 +255,32 @@ def test_ping_link_scoped_for_named_profile(lh, home):
     assert text3.count("profile=") == 1
 
 
+def test_dashboard_link_parses_query_not_substring(lh, home):
+    named = home / "profiles" / "work"
+    named.mkdir(parents=True)
+    link = lh.delivery.dashboard_link
+    # a lookalike param must not block scoping
+    assert link("http://h/x?notprofile=1", str(named)) == "http://h/x?notprofile=1&profile=work"
+    # existing params preserved
+    assert link("http://h/x?foo=bar", str(named)) == "http://h/x?foo=bar&profile=work"
+    # real profile param respected, whatever its value
+    assert link("http://h/x?profile=other", str(named)) == "http://h/x?profile=other"
+    # fragment survives
+    assert link("http://h/x#top", str(named)) == "http://h/x?profile=work#top"
+
+
+def test_learner_recovers_from_wrong_shape_state(lh, home):
+    p = lh.learner.model_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("[1, 2, 3]")  # parseable JSON, wrong shape
+    m = lh.learner.load()  # must not raise
+    assert m["settings"]["channel"] == ""
+    assert p.with_suffix(".corrupt").exists()
+    p.write_text('"just a string"')
+    m = lh.learner.load()
+    assert isinstance(m, dict) and "milestones" in m
+
+
 def test_outbox_records_even_without_channel(lh, home, monkeypatch):
     calls = []
     monkeypatch.setattr(lh.delivery.subprocess, "run",

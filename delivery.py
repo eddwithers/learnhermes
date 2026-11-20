@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from plugins.plugin_storage import plugin_data_dir
 
@@ -34,13 +35,18 @@ def dashboard_link(base_url: str, home: str) -> str:
 
     The multiplex dashboard resolves plugin routes against the default
     profile unless ?profile=<name> is present — a bare link from a named
-    profile would show 'Plugin not found'.
+    profile would show 'Plugin not found'. Query params are parsed, not
+    substring-matched (?notprofile=1 must not block scoping).
     """
     home_path = Path(home)
-    if home_path.parent.name == "profiles" and "profile=" not in base_url:
-        sep = "&" if "?" in base_url else "?"
-        return f"{base_url}{sep}profile={home_path.name}"
-    return base_url
+    if home_path.parent.name != "profiles":
+        return base_url
+    parts = urlsplit(base_url)
+    params = parse_qsl(parts.query, keep_blank_values=True)
+    if any(key == "profile" for key, _ in params):
+        return base_url
+    params.append(("profile", home_path.name))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), parts.fragment))
 
 
 def build_ping(dispatch: dict, dashboard_url: str, home: str) -> str:

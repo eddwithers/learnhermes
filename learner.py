@@ -59,6 +59,10 @@ def _read() -> dict:
         # Malformed state is preserved beside the file, never silently reset.
         p.with_suffix(".corrupt").write_bytes(p.read_bytes())
         return copy.deepcopy(DEFAULT_MODEL)
+    if not isinstance(data, dict):
+        # Parseable but wrong shape (e.g. a JSON list) — same recovery path.
+        p.with_suffix(".corrupt").write_bytes(p.read_bytes())
+        return copy.deepcopy(DEFAULT_MODEL)
     base = copy.deepcopy(DEFAULT_MODEL)
     base.update(data)
     stored = data.get("settings", {})
