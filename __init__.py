@@ -146,7 +146,7 @@ def _tick(home: str, force: bool = False) -> dict:
     report["reason"] = reason
     if not ok:
         return report
-    text = delivery.build_ping(dispatch, model["settings"]["dashboard_url"])
+    text = delivery.build_ping(dispatch, model["settings"]["dashboard_url"], home)
     delivered, detail = delivery.send(
         model["settings"]["channel"], text, home, dispatch["id"]
     )

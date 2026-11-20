@@ -96,6 +96,8 @@
     const [data, setData] = useState(null);
     const [error, setError] = useState("");
     const [busy, setBusy] = useState(false);
+    const profile = new URLSearchParams(window.location.search).get("profile");
+    const snapshotHref = API + "/snapshot" + (profile ? "?profile=" + encodeURIComponent(profile) : "");
 
     const load = useCallback(() => {
       SDK.fetchJSON(API + "/journey").then(setData).catch((e) => setError(String(e)));
@@ -122,7 +124,7 @@
         h(Badge, { variant: "outline" }, data.sessions_7d + " sessions this week"),
         data.settings.enabled ? null : h(Badge, { variant: "outline" }, "paused"),
         data.errors_48h > 0 ? h(Badge, { variant: "outline" }, data.errors_48h + " errors (48h)") : null,
-        h("a", { href: API + "/snapshot", target: "_blank", rel: "noreferrer", className: "text-xs underline text-muted-foreground ml-auto" }, "Mobile snapshot"),
+        h("a", { href: snapshotHref, target: "_blank", rel: "noreferrer", className: "text-xs underline text-muted-foreground ml-auto" }, "Mobile snapshot"),
       ),
       error ? h("div", { className: "text-xs text-destructive" }, error) : null,
       h(CurrentDispatch, {

@@ -233,12 +233,26 @@ def test_record_sent_updates_cap_and_state(lh, home):
 
 # --- delivery ------------------------------------------------------------
 
-def test_ping_is_short_and_links_dashboard(lh):
+def test_ping_is_short_and_links_dashboard(lh, home):
     d = lh.timing.load_catalogue()[3]
-    text = lh.delivery.build_ping(d, "http://127.0.0.1:9119/learnhermes")
+    text = lh.delivery.build_ping(d, "http://127.0.0.1:9119/learnhermes", str(home))
     assert f"Dispatch {d['n']}" in text
     assert "http://127.0.0.1:9119/learnhermes" in text
     assert len(text) < 400
+
+
+def test_ping_link_scoped_for_named_profile(lh, home):
+    named = home / "profiles" / "work"
+    named.mkdir(parents=True)
+    d = lh.timing.load_catalogue()[0]
+    text = lh.delivery.build_ping(d, "http://host:9119/learnhermes", str(named))
+    assert "http://host:9119/learnhermes?profile=work" in text
+    # default-profile home: no scoping param
+    text2 = lh.delivery.build_ping(d, "http://host:9119/learnhermes", str(home))
+    assert "profile=" not in text2
+    # already-scoped URL: no duplicate param
+    text3 = lh.delivery.build_ping(d, "http://host:9119/learnhermes?profile=work", str(named))
+    assert text3.count("profile=") == 1
 
 
 def test_outbox_records_even_without_channel(lh, home, monkeypatch):

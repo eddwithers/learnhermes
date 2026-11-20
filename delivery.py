@@ -29,7 +29,21 @@ def _hermes_cmd() -> list[str]:
     return ["hermes"]
 
 
-def build_ping(dispatch: dict, dashboard_url: str) -> str:
+def dashboard_link(base_url: str, home: str) -> str:
+    """Scope the dashboard URL to the owning profile when it is a named one.
+
+    The multiplex dashboard resolves plugin routes against the default
+    profile unless ?profile=<name> is present — a bare link from a named
+    profile would show 'Plugin not found'.
+    """
+    home_path = Path(home)
+    if home_path.parent.name == "profiles" and "profile=" not in base_url:
+        sep = "&" if "?" in base_url else "?"
+        return f"{base_url}{sep}profile={home_path.name}"
+    return base_url
+
+
+def build_ping(dispatch: dict, dashboard_url: str, home: str) -> str:
     why = " ".join(dispatch["why"].split())
     if len(why) > 160:
         cut = why[:160].rfind(". ")
@@ -37,7 +51,7 @@ def build_ping(dispatch: dict, dashboard_url: str) -> str:
     return (
         f"LearnHermes — Dispatch {dispatch['n']}: {dispatch['title']}\n"
         f"{why}\n"
-        f"Open your journey: {dashboard_url}"
+        f"Open your journey: {dashboard_link(dashboard_url, home)}"
     )
 
 

@@ -66,6 +66,10 @@ Prefer manual control?
 Set them in chat (the `learnhermes_journey` tool), on the dashboard, or via
 `/dispatches`.
 
+**Named profiles:** on a multiplexed gateway, dashboard and snapshot links
+are automatically scoped with `?profile=<name>` so they open the right
+profile's journey from your phone.
+
 **Email:** LearnHermes never owns a sending address. If you choose email, it
 rides your existing Hermes email route (your SMTP, your From). No route
 configured? The plugin tells you, and setting one up can itself become a
@@ -92,9 +96,9 @@ hermes plugins doctor . --ci       # real discovery + register(ctx)
 scripts/run_tests.sh /absolute/path/to/learnhermes/tests -q
 ```
 
-39 deterministic behaviour tests: milestone evidence, timing rules, send
+40 deterministic behaviour tests: milestone evidence, timing rules, send
 window wraparound, settings migration, delivery outbox, snapshot escaping,
-the conversational tool, one-time welcome.
+profile-scoped links, the conversational tool, one-time welcome.
 
 ## Roadmap
 
