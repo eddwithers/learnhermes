@@ -224,7 +224,7 @@ def test_selection_skips_achieved_and_dismissed(lh, home):
 
 def test_record_sent_updates_cap_and_state(lh, home):
     now = time.mktime(time.strptime("2026-11-19 12:00", "%Y-%m-%d %H:%M"))
-    lh.timing.record_sent(lh.learner.load(), "first_tool", now=now)
+    lh.timing.record_sent("first_tool", now=now)
     m = lh.learner.load()
     assert m["dispatches"]["first_tool"]["state"] == "sent"
     assert m["sent_today"]["count"] == 1
@@ -410,3 +410,17 @@ def test_welcome_skipped_if_channel_already_set(lh, home, monkeypatch):
     lh.learner.mutate(lambda m: m["settings"].update({"channel": "push"}))
     assert lh._on_pre_llm_call("s1", "hi", True) is None
     assert lh.learner.load()["welcomed"] is True
+
+
+def test_welcome_never_consumed_by_automation(lh, home, monkeypatch):
+    monkeypatch.setattr(lh, "get_hermes_home", lambda: home)
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    for platform in ("cron", "subagent", "webhook", "api"):
+        assert lh._on_pre_llm_call("s1", "job output", True, platform=platform) is None
+    assert lh.learner.load().get("welcomed") is not True
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_123")
+    assert lh._on_pre_llm_call("s1", "worker turn", True, platform="cli") is None
+    assert lh.learner.load().get("welcomed") is not True
+    monkeypatch.delenv("HERMES_KANBAN_TASK")
+    # the user's real first chat still gets it
+    assert lh._on_pre_llm_call("s1", "hi", True, platform="cli") is not None

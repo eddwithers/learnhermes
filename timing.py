@@ -90,7 +90,7 @@ def can_send(model: dict, now: float | None = None, force: bool = False) -> tupl
     return True, "ok"
 
 
-def record_sent(model: dict, dispatch_id: str, now: float | None = None) -> None:
+def record_sent(dispatch_id: str, now: float | None = None) -> None:
     now = now if now is not None else time.time()
     today = time.strftime("%Y-%m-%d", time.localtime(now))
 

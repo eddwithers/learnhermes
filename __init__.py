@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from collections import Counter
@@ -77,8 +78,16 @@ _WELCOME_TEXT = (
 )
 
 
-def _on_pre_llm_call(session_id, user_message, is_first_turn, **kwargs):
+# Automation surfaces must never consume the one-time welcome — it belongs
+# to the user's first real conversation. Kanban workers run as CLI sessions
+# but carry HERMES_KANBAN_TASK; the marker is exactly the right fence here.
+_NON_USER_PLATFORMS = {"cron", "subagent", "webhook", "api"}
+
+
+def _on_pre_llm_call(session_id, user_message, is_first_turn, platform="", **kwargs):
     """One-time welcome: cache-safe (appended to the user message, ephemeral)."""
+    if platform in _NON_USER_PLATFORMS or os.environ.get("HERMES_KANBAN_TASK"):
+        return None
     home = str(get_hermes_home())
     model = learner.load()
     if model.get("welcomed"):
@@ -151,7 +160,7 @@ def _tick(home: str, force: bool = False) -> dict:
         model["settings"]["channel"], text, home, dispatch["id"]
     )
     if delivered:
-        timing.record_sent(model, dispatch["id"])
+        timing.record_sent(dispatch["id"])
         report["sent"] = dispatch["id"]
         snapshot.write_snapshot(journey.build_journey(home))
     else:
