@@ -1,5 +1,7 @@
 # LearnHermes
 
+<p align="center"><img src="docs/brand-card.png" alt="LearnHermes — from install to power user" width="800"></p>
+
 > **Beta — v0.1.2-beta.** Verified on macOS: 54 behaviour tests, `hermes plugins validate` + `doctor`, and live runtime checks of the wizard, milestone verification, timing loop, dashboard and delivery. Windows is not yet tested. **Beta testers wanted** — see the pinned issue.
 
 A companion for the Hermes journey. LearnHermes watches how you actually use
