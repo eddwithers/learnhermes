@@ -23,7 +23,7 @@
     );
   }
 
-  function CurrentDispatch({ d, onDismiss, onSend, busy }) {
+  function CurrentDispatch({ d, hasChannel, onDismiss, onSend, busy }) {
     if (!d) return null;
     return h(Card, { className: "border-ring" },
       h(CardHeader, null,
@@ -33,6 +33,8 @@
         ),
       ),
       h(CardContent, { className: "space-y-3" },
+        !hasChannel ? h("p", { className: "text-xs rounded-md p-2 border border-border bg-muted text-muted-foreground" },
+          "No delivery channel is set, so pings can't be sent yet. Pick a channel in Dispatch settings below — or ask Hermes in chat where dispatches should go.") : null,
         h("p", { className: "text-sm text-muted-foreground" }, d.why),
         h("div", null,
           h(Label, { className: "text-xs" }, "Starter prompt — paste this to Hermes"),
@@ -129,6 +131,7 @@
       error ? h("div", { className: "text-xs text-destructive" }, error) : null,
       h(CurrentDispatch, {
         d: data.current,
+        hasChannel: !!(data.settings.channel && data.settings.channel.trim()),
         busy: busy,
         onDismiss: () => data.current && act("/dispatch/" + data.current.id + "/dismiss"),
         onSend: () => act("/send-now"),

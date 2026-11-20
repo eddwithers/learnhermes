@@ -13,11 +13,14 @@ SCHEMA = {
     "description": (
         "LearnHermes journey companion — guides the user from new install to "
         "power user with timed dispatches (lessons verified against their real "
-        "setup). Use when the user asks about LearnHermes, dispatches or their "
-        "learning journey, or when a LearnHermes welcome note asks you to offer "
-        "setup. Actions: 'status' (journey, settings, detected channels), "
-        "'configure' (set channel and preferences), 'dismiss' (skip the current "
-        "dispatch), 'ping' (deliver the current dispatch now)."
+        "setup). When the user asks about LearnHermes, dispatches or their "
+        "learning journey, call action=status FIRST and report their real "
+        "progress plus the next_step guidance — never answer with a generic "
+        "explanation alone. Also use when a LearnHermes welcome note asks you "
+        "to offer setup. Actions: 'status' (journey, settings, detected "
+        "channels, next_step), 'configure' (set channel and preferences), "
+        "'dismiss' (skip the current dispatch), 'ping' (deliver the current "
+        "dispatch now)."
     ),
     "parameters": {
         "type": "object",
@@ -51,6 +54,28 @@ _CONFIG_RULES = {
 }
 
 
+def _next_step(j: dict) -> str:
+    """Concrete guidance so the agent surfaces blockers, not just facts."""
+    s = j["settings"]
+    if not s.get("enabled", True):
+        return "Dispatches are paused. If the user wants them, action=configure with enabled=true."
+    if not s.get("channel"):
+        platforms = ", ".join(j.get("gateway_targets", [])) or "none detected"
+        return (
+            "No delivery channel is configured, so no dispatches can arrive yet — "
+            "this is the most common reason a user sees nothing. Detected platforms: "
+            f"{platforms}. Ask the user where dispatches should go, then "
+            "action=configure with their chosen channel, then action=ping to send "
+            "the first one. If no platform is connected, offer the dashboard instead."
+        )
+    if j.get("current"):
+        return (
+            f"Current dispatch: {j['current']['title']}. It arrives at a natural "
+            "pause inside the send window; action=ping sends it now."
+        )
+    return "All dispatches are complete or dismissed — the journey is done for now."
+
+
 def make_handler(home: str, tick_fn):
     from . import journey, learner, timing
 
@@ -59,6 +84,7 @@ def make_handler(home: str, tick_fn):
             action = (args or {}).get("action", "status")
             if action == "status":
                 j = journey.build_journey(home)
+                from . import delivery
                 return json.dumps({
                     "ok": True,
                     "milestones_done": j["milestones_done"],
@@ -67,6 +93,8 @@ def make_handler(home: str, tick_fn):
                     "current_dispatch": j["current"],
                     "settings": j["settings"],
                     "detected_platforms": j["gateway_targets"],
+                    "dashboard_link": delivery.dashboard_link(j["settings"]["dashboard_url"], home),
+                    "next_step": _next_step(j),
                     "journey": [
                         {"n": d["n"], "title": d["title"], "state": d["state"]}
                         for d in j["dispatches"]

@@ -1,6 +1,6 @@
 # LearnHermes
 
-> **Beta — v0.1.0-beta.** Verified on macOS: 45 behaviour tests, `hermes plugins validate` + `doctor`, and live runtime checks of the wizard, milestone verification, timing loop, dashboard and delivery. Windows is not yet tested. **Beta testers wanted** — see the pinned issue.
+> **Beta — v0.1.1-beta.** Verified on macOS: 50 behaviour tests, `hermes plugins validate` + `doctor`, and live runtime checks of the wizard, milestone verification, timing loop, dashboard and delivery. Windows is not yet tested. **Beta testers wanted** — see the pinned issue.
 
 A companion for the Hermes journey. LearnHermes watches how you actually use
 [Hermes Agent](https://github.com/NousResearch/hermes-agent), verifies your
@@ -105,10 +105,11 @@ hermes plugins doctor . --ci       # real discovery + register(ctx)
 scripts/run_tests.sh /absolute/path/to/learnhermes/tests -q
 ```
 
-45 deterministic behaviour tests: milestone evidence, timing rules, send
+50 deterministic behaviour tests: milestone evidence, timing rules, send
 window wraparound, settings migration, state recovery (bad JSON, wrong
 shape, invalid UTF-8), delivery outbox, snapshot escaping, profile-scoped
-links, the conversational tool, one-time welcome and its automation gates.
+links, the conversational tool (blocker-surfacing status, scoped dashboard
+link, send-now error mapping), one-time welcome and its automation gates.
 
 ## Roadmap
 

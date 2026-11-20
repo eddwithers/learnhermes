@@ -51,3 +51,37 @@ setup. Ask where dispatches should go (offer the detected platforms), then
 `configure` the channel and `ping` a first test dispatch. If the user
 declines, respect it — the journey stays available on the dashboard and via
 `/dispatches`, and you should not bring it up again unprompted.
+
+## Answering journey questions
+
+When the user asks how LearnHermes works, where their dispatches are, or
+anything about the journey: call `learnhermes_journey` with `action=status`
+FIRST. Report their actual progress briefly (milestones done, current
+dispatch) and follow the `next_step` guidance — especially when no channel
+is configured, which is the usual reason nothing has arrived. A short,
+concrete answer beats a general explanation.
+
+## Dashboard access from another device
+
+The `dashboard_link` in the status result is the correct profile-scoped
+URL, but it is only reachable as configured:
+
+- `127.0.0.1` / `localhost` works ONLY on the machine running Hermes. If
+  the user is on a phone or another computer, that URL points at their own
+  device and will fail. Ask which device they are on before handing over
+  a link.
+- For a phone on the same Wi-Fi, use the machine's LAN address
+  (e.g. `http://192.168.x.x:9119/learnhermes?profile=<name>`); for access
+  off-LAN, a Tailscale-style address. Update `dashboard_url` via
+  `action=configure` so ping links match.
+- The dashboard requires sign-in (the user's Hermes dashboard credentials).
+- Named profiles need `?profile=<name>` on dashboard URLs; ping links are
+  scoped automatically.
+
+## Tool missing in this session
+
+Tools load at session start. If LearnHermes was installed while a session
+was already running, `learnhermes_journey` is not available in that
+session — tell the user to start a fresh session (`/new` or a new chat).
+Never edit `learner.json` by hand to work around it; the dashboard and
+`/dispatches` still work.

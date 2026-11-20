@@ -74,4 +74,7 @@ def settings(body: dict):
 @router.post("/send-now")
 def send_now():
     report = lh._tick(str(get_hermes_home()), force=True)
-    return {"ok": report["sent"] is not None, **report}
+    ok = report["sent"] is not None
+    # Surface the real reason (e.g. "no channel configured") — the UI shows
+    # `error`, and a generic "action failed" hides the actual blocker.
+    return {"ok": ok, "error": None if ok else report["reason"], **report}

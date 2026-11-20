@@ -421,6 +421,48 @@ def test_tool_status(lh, home):
     assert "settings" in out and "journey" in out
 
 
+def test_status_surfaces_missing_channel_blocker(lh, home):
+    handler = lh.tools.make_handler(str(home), lh._tick)
+    out = json.loads(handler({"action": "status"}))
+    assert "No delivery channel" in out["next_step"]
+    assert "configure" in out["next_step"]
+
+
+def test_status_next_step_with_channel_and_current(lh, home):
+    handler = lh.tools.make_handler(str(home), lh._tick)
+    lh.learner.mutate(lambda m: m["settings"].update({"channel": "telegram"}))
+    out = json.loads(handler({"action": "status"}))
+    assert "Current dispatch" in out["next_step"]
+
+
+def test_status_next_step_when_paused(lh, home):
+    handler = lh.tools.make_handler(str(home), lh._tick)
+    lh.learner.mutate(lambda m: m["settings"].update({"enabled": False}))
+    out = json.loads(handler({"action": "status"}))
+    assert "paused" in out["next_step"]
+
+
+def test_status_includes_scoped_dashboard_link(lh, home):
+    named = home / "profiles" / "work"
+    named.mkdir(parents=True)
+    handler = lh.tools.make_handler(str(named), lh._tick)
+    out = json.loads(handler({"action": "status"}))
+    assert out["dashboard_link"].endswith("?profile=work")
+
+
+def test_send_now_surfaces_reason_as_error(lh, home, monkeypatch):
+    from learnhermes.dashboard import plugin_api
+    monkeypatch.setattr(plugin_api, "get_hermes_home", lambda: home)
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: {
+        "newly_achieved": [], "sent": None, "reason": "no channel configured"})
+    out = plugin_api.send_now()
+    assert out["ok"] is False and out["error"] == "no channel configured"
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: {
+        "newly_achieved": [], "sent": "memory", "reason": ""})
+    out = plugin_api.send_now()
+    assert out["ok"] is True and out["error"] is None
+
+
 def test_tool_configure_validates(lh, home):
     handler = lh.tools.make_handler(str(home), lh._tick)
     out = json.loads(handler({"action": "configure", "channel": "telegram"}))
