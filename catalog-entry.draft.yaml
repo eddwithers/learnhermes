@@ -1,0 +1,32 @@
+# DRAFT catalog entry — NOT for submission yet.
+# Finalize only after: public repo created, Edd's multi-day test passes,
+# publication explicitly approved, SHA pinned to the exact tested commit.
+# Submit as one file: plugin-catalog/learnhermes.yaml in NousResearch/hermes-agent.
+
+name: learnhermes
+title: LearnHermes
+repo: https://github.com/eddwithers/learnhermes   # planned — confirm before submission
+sha: "0000000000000000000000000000000000000000"    # pin the exact tested commit at publication
+version: "0.1.0"
+description: "A companion for the Hermes journey, built for brand-new users: LearnHermes watches how you actually use Hermes and sends timed 'dispatches' — short lessons grounded in the official docs, each with a starter prompt and a guide link — to a channel you choose, while a dashboard tab and a self-contained mobile snapshot page carry the full journey. Milestones are verified from real artifacts (a cron job exists, an agent-written skill exists, a session exists), never self-reported; the timing engine delivers one dispatch at a time at natural pauses (idle >= 15 min, no active session), inside a configurable send window that may wrap midnight, under a daily cap, spaced by an adaptive pace — fast-moving users get a fast-moving guide. Setup is conversational: on the first chat after install a one-time welcome note (appended to the user message at API time, never the system prompt, so prompt caching is untouched) lets Hermes itself offer the journey, configure the channel through the learnhermes_journey tool, and send a first test ping; /dispatches and the dashboard give manual control. Disclosure — observation is local-only reads of sessions, cron jobs, skills, memory files, profiles and hook events; no telemetry and no network calls except delivery you configure via `hermes send` (any configured target: telegram, discord, push, email...); LearnHermes never owns a sending address — email rides the user's existing Hermes email route and is one-way (replies are never parsed); every ping is recorded to a local outbox under HERMES_HOME/plugin-data/learnhermes for audit; the one-time welcome is the only prompt injection and it is ephemeral; dashboard routes (/api/plugins/learnhermes/) sit behind the dashboard's normal auth; no .env or auth.json reads, no core overrides, no tool interception; one tool and five observer hooks; state is a flock-guarded JSON file that survives plugin updates."
+maintainer: eddwithers
+tier: community
+category: general
+requires_hermes: ">=0.23.0"
+docs_url: https://github.com/eddwithers/learnhermes#readme
+readme: true
+screenshots: []   # add dashboard + snapshot screenshots from the tested commit before submission
+platforms: [linux, macos]
+known_issues:
+  - "Windows not yet claimed: inter-process state locking uses flock (POSIX); on Windows the fallback is in-process only, so concurrent writers could race. Test and harden before adding windows."
+capabilities:
+  provides_tools:
+    - learnhermes_journey
+  provides_hooks:
+    - on_session_start
+    - on_session_end
+    - post_tool_call
+    - api_request_error
+    - pre_llm_call
+  provides_middleware: []
+  requires_env: []
