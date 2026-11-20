@@ -1,5 +1,7 @@
 # LearnHermes
 
+> **Beta — v0.1.0-beta.** Verified on macOS: 45 behaviour tests, `hermes plugins validate` + `doctor`, and live runtime checks of the wizard, milestone verification, timing loop, dashboard and delivery. Windows is not yet tested. **Beta testers wanted** — see the pinned issue.
+
 A companion for the Hermes journey. LearnHermes watches how you actually use
 [Hermes Agent](https://github.com/NousResearch/hermes-agent), verifies your
 progress from real artifacts, and sends **dispatches** — short, timed lessons
@@ -29,14 +31,21 @@ to you, and it knows your setup.
 
 ## Install
 
-Today (pre-catalog):
+```bash
+hermes plugins install eddwithers/learnhermes --ref v0.1.0-beta --no-enable
+hermes plugins enable learnhermes
+```
+
+Or from source:
 
 ```bash
-git clone <this-repo> ~/.hermes/plugins/learnhermes
+git clone https://github.com/eddwithers/learnhermes ~/.hermes/plugins/learnhermes
 hermes plugins enable learnhermes
 ```
 
 Once catalogued: `hermes plugins install learnhermes`.
+
+![LearnHermes dashboard](docs/dashboard.png)
 
 ## Starting the journey
 
