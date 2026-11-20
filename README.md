@@ -32,7 +32,7 @@ to you, and it knows your setup.
 ## Install
 
 ```bash
-hermes plugins install eddwithers/learnhermes --ref 99cba1a --no-enable
+hermes plugins install eddwithers/learnhermes --ref 99cba1a470416672498908f3404ee7ae2898363e --no-enable
 hermes plugins enable learnhermes
 ```
 
