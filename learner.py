@@ -169,7 +169,7 @@ def mark_milestone(mid: str, evidence: str) -> bool:
             newly = True
         # Evidence-backed completion closes any open dispatch for it.
         d = m["dispatches"].get(mid)
-        if d and d["state"] in ("pending", "sent"):
+        if d and d["state"] in ("pending", "sending", "sent"):
             d["state"] = "done"
             d["done_at"] = time.time()
     mutate(edit)
@@ -178,6 +178,6 @@ def mark_milestone(mid: str, evidence: str) -> bool:
 
 def pending_dispatch(model: dict) -> str | None:
     for did, d in model["dispatches"].items():
-        if d["state"] in ("pending", "sent"):
+        if d["state"] in ("pending", "sending", "sent"):
             return did
     return None

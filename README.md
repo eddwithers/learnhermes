@@ -2,7 +2,7 @@
 
 <p align="center"><img src="docs/brand-card.png" alt="LearnHermes — from install to power user" width="800"></p>
 
-> **Beta — v0.1.2-beta.** Verified on macOS: 54 behaviour tests, `hermes plugins validate` + `doctor`, and live runtime checks of the wizard, milestone verification, timing loop, dashboard and delivery. Windows is not yet tested. **Beta testers wanted** — see the pinned issue.
+> **Beta — v0.1.3-beta.** Verified on macOS: 87 behaviour tests, `hermes plugins validate` + `doctor`, and real-CLI runs on a scratch profile (no stray processes, no ticks from short-lived commands). Earlier betas were also checked live for the wizard, milestone verification, dashboard and delivery. Windows is not yet tested. **Beta testers wanted** — see the pinned issue.
 
 A companion for the Hermes journey. LearnHermes watches how you actually use
 [Hermes Agent](https://github.com/NousResearch/hermes-agent), verifies your
@@ -107,12 +107,25 @@ hermes plugins doctor . --ci       # real discovery + register(ctx)
 scripts/run_tests.sh /absolute/path/to/learnhermes/tests -q
 ```
 
-54 deterministic behaviour tests: milestone evidence, timing rules, send
+87 deterministic behaviour tests: milestone evidence, timing rules, send
 window wraparound, settings migration, state recovery (bad JSON, wrong
 shape, invalid UTF-8), delivery outbox + infra-noise filtering, channel
-validation, snapshot escaping, profile-scoped links, the conversational tool
-(blocker-surfacing status, scoped dashboard link, send-now error mapping),
-one-time welcome and its automation gates.
+validation on both write paths (tool + dashboard), unconnected-channel
+blocker surfacing (tick, status, `/dispatches`, snapshot), platform listing
+via `hermes send --list --json` (a failed or never-run listing is
+"unknown", never "none connected"), real send errors via `--json`,
+timing-loop lifecycle (arms at register without a running loop — both
+isolation modes' entry paths, exercised with a stub plugin context rather
+than a real host — first tick waits a full interval, no executor thread
+parked between ticks, profile scope kept on the fallback thread, race-free
+arming, stops on unload), child processes
+(a marked child never arms; an unmarked short-lived process exits promptly
+and never ticks — both in a real separate Python process, not the real
+`hermes` CLI), at-most-once delivery when a process dies mid-send or a
+send times out, cross-process tick serialisation, snapshot escaping,
+profile-scoped links, the conversational tool (blocker-surfacing status,
+scoped dashboard link, send-now error mapping), one-time welcome and its
+automation gates.
 
 ## Roadmap
 

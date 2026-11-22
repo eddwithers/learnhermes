@@ -64,6 +64,14 @@ def settings(body: dict):
         updates[key] = value
     if not updates:
         return {"ok": False, "error": "nothing to update"}
+    if "channel" in updates:
+        # Same gate as the tool's configure action — the dashboard is the
+        # other write path for channel and must not accept invented or
+        # unconnected targets either.
+        from learnhermes import delivery
+        ok, msg = delivery.validate_channel(updates["channel"], str(get_hermes_home()))
+        if not ok:
+            return {"ok": False, "error": msg}
 
     def edit(m):
         m["settings"].update(updates)

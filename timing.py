@@ -104,6 +104,51 @@ def record_sent(dispatch_id: str, now: float | None = None) -> None:
     learner.mutate(edit)
 
 
+# A send attempt still marked "sending" after this long was interrupted (the
+# process died mid-send). `hermes send` times out at 45s, so 120s is safely past
+# any live attempt.
+SENDING_STALE_SECONDS = 120
+
+
+def mark_sending(dispatch_id: str, now: float | None = None) -> None:
+    now = now if now is not None else time.time()
+    from . import learner
+    learner.mutate(lambda m: m["dispatches"].__setitem__(
+        dispatch_id, {"state": "sending", "attempt_at": now}))
+
+
+def clear_sending(dispatch_id: str) -> None:
+    from . import learner
+
+    def edit(m):
+        if m["dispatches"].get(dispatch_id, {}).get("state") == "sending":
+            del m["dispatches"][dispatch_id]
+    learner.mutate(edit)
+
+
+def settle_stale_sends(now: float | None = None) -> list[str]:
+    """Interrupted attempts count as sent (at-most-once): the child process may
+    have delivered after its parent died, so re-sending risks a duplicate."""
+    now = now if now is not None else time.time()
+    settled: list[str] = []
+
+    def edit(m):
+        today = time.strftime("%Y-%m-%d", time.localtime(now))
+        for did, d in m["dispatches"].items():
+            if d.get("state") == "sending" and now - d.get("attempt_at", 0) >= SENDING_STALE_SECONDS:
+                at = d.get("attempt_at", now)
+                m["dispatches"][did] = {"state": "sent", "sent_at": at, "unconfirmed": True}
+                m["last_sent_at"] = max(m.get("last_sent_at", 0), at)
+                if time.strftime("%Y-%m-%d", time.localtime(at)) == today:
+                    if m["sent_today"].get("date") != today:
+                        m["sent_today"] = {"date": today, "count": 0}
+                    m["sent_today"]["count"] += 1  # counts toward the daily cap
+                settled.append(did)
+    from . import learner
+    learner.mutate(edit)
+    return settled
+
+
 def dismiss(dispatch_id: str) -> None:
     from . import learner
 

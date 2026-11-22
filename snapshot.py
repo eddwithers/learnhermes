@@ -68,7 +68,19 @@ def render_html(j: dict) -> str:
   <a href="{e(c['docs_url'])}">Official guide</a>
   <p class="why" style="margin-top:10px">Completion is verified from your real setup — no need to report back.</p>
 </div>"""
-    targets = ", ".join(j.get("gateway_targets", [])) or "none detected"
+    targets_list = j.get("gateway_targets", [])
+    if j.get("targets_known", True):
+        targets = ", ".join(targets_list) or "none detected"
+    else:
+        targets = "not checked yet"
+    channel = (j["settings"].get("channel") or "").strip()
+    channel_warning = ""
+    if channel and j.get("targets_known", True) and channel.split(":")[0].strip().lower() not in targets_list:
+        channel_warning = (
+            '<p class="why" style="color:#ff8a50">This channel is not connected on this '
+            "profile — pings can't be sent. Pick a connected platform in the dashboard "
+            "settings, or clear the channel for dashboard-only mode.</p>"
+        )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -85,6 +97,7 @@ def render_html(j: dict) -> str:
 <div class="card">
   <div class="label">Dispatch channel</div>
   <p class="why">{e(j['settings'].get('channel') or 'not set')} · detected platforms: {e(targets)}</p>
+  {channel_warning}
 </div>
 <footer>Generated {time.strftime('%Y-%m-%d %H:%M', time.localtime())} · LearnHermes watches local state only;
 milestones are verified from artifacts, never self-reported.</footer>

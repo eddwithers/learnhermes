@@ -60,13 +60,25 @@ def _next_step(j: dict) -> str:
     if not s.get("enabled", True):
         return "Dispatches are paused. If the user wants them, action=configure with enabled=true."
     if not s.get("channel"):
-        platforms = ", ".join(j.get("gateway_targets", [])) or "none detected"
+        if j.get("targets_known", True):
+            platforms = ", ".join(j.get("gateway_targets", [])) or "none detected"
+        else:
+            platforms = "not checked yet (run action=status again shortly)"
         return (
             "No delivery channel is configured, so no dispatches can arrive yet — "
             "this is the most common reason a user sees nothing. Detected platforms: "
             f"{platforms}. Ask the user where dispatches should go, then "
             "action=configure with their chosen channel, then action=ping to send "
             "the first one. If no platform is connected, offer the dashboard instead."
+        )
+    platforms = j.get("gateway_targets", [])
+    channel = (s.get("channel") or "").strip()
+    if channel and j.get("targets_known", True) and channel.split(":")[0].strip().lower() not in platforms:
+        detected = ", ".join(platforms) or "none"
+        return (
+            f"The configured channel '{channel}' is not connected on this profile, so dispatches "
+            f"cannot arrive. Detected platforms: {detected}. Ask the user to pick a connected "
+            "channel (action=configure), or clear the channel (empty string) for dashboard-only mode."
         )
     if j.get("current"):
         return (
@@ -93,6 +105,9 @@ def make_handler(home: str, tick_fn):
                     "current_dispatch": j["current"],
                     "settings": j["settings"],
                     "detected_platforms": j["gateway_targets"],
+                    # False = the platform list has never been read successfully;
+                    # an empty detected_platforms then means "unknown", not "none".
+                    "detected_platforms_known": j.get("targets_known", True),
                     "dashboard_link": delivery.dashboard_link(j["settings"]["dashboard_url"], home),
                     "next_step": _next_step(j),
                     "journey": [

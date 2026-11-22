@@ -18,7 +18,7 @@ def build_journey(home: str) -> dict:
             state = "done"
         elif dstate == "dismissed":
             state = "dismissed"
-        elif dstate == "sent":
+        elif dstate in ("sent", "sending"):
             state = "sent"
         else:
             state = "open"
@@ -45,6 +45,9 @@ def build_journey(home: str) -> dict:
         "activity": model.get("activity", {}),
         "errors_48h": len(model.get("errors", [])),
         "gateway_targets": model.get("gateway_targets", []),
+        # False until a platform listing has succeeded at least once — then an
+        # empty list means "none connected", not "never checked".
+        "targets_known": "gateway_targets" in model,
         "dispatches": rows,
         "current": current,
         "milestones_done": len(model["milestones"]),

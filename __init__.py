@@ -8,6 +8,7 @@ dashboard link. The dashboard carries the full lesson; the ping stays short.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import threading
@@ -24,7 +25,8 @@ logger = logging.getLogger(__name__)
 _TOOL_BUFFER: Counter = Counter()
 _ERROR_BUFFER: list = []
 _BUFFER_LOCK = threading.Lock()
-_LOOPS: dict[str, bool] = {}
+_LOOPS: dict[str, threading.Event] = {}  # home -> stop event for the timing loop
+_LOOPS_LOCK = threading.Lock()
 _TICK_SECONDS = 300
 
 
@@ -103,8 +105,12 @@ def _on_pre_llm_call(session_id, user_message, is_first_turn, platform="", **kwa
         learner.mutate(lambda m: m.update({"welcomed": True}))
         return None  # already started via dashboard — no pitch needed
     targets = delivery.list_targets(home)
-    learner.mutate(lambda m: m.update({"welcomed": True, "gateway_targets": targets}))
+    learner.mutate(lambda m: m.update(
+        {"welcomed": True, **({"gateway_targets": targets} if targets is not None else {})}
+    ))
     hint = ", ".join(targets) if targets else (
+        "unknown right now (listing failed) — the user can check later, or use the dashboard"
+        if targets is None else
         "none yet — they can connect a messaging platform first, or use the dashboard"
     )
     return {"context": _WELCOME_TEXT.format(targets=hint)}
@@ -120,31 +126,147 @@ def _ensure_loop() -> None:
         _start_loop(ctx, home)
 
 
-def _start_loop(ctx, home: str) -> None:
-    if _LOOPS.get(home):
-        return
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    _LOOPS[home] = True
-    ctx.spawn_task(_tick_loop(home), name=f"learnhermes-timing-{Path(home).name}")
+def _thread_loop(home: str, stop: threading.Event) -> None:
+    """The timing loop on a plain daemon thread (the in-process path).
 
+    Deliberately not asyncio: `asyncio.to_thread` runs work on the default
+    executor, whose worker threads the interpreter joins at exit — a
+    short-lived `hermes` command would hang until the wait ended. A plain
+    daemon thread blocked in stop.wait() never delays process exit.
 
-async def _tick_loop(home: str) -> None:
-    while True:
+    The first tick waits a full interval, so a short-lived process exits
+    long before it ticks — it neither scans nor attempts delivery. Only a
+    process that stays up for a whole interval (the gateway, an open chat)
+    ever ticks.
+    """
+    while not stop.wait(_TICK_SECONDS):
         try:
             _tick(home)
         except Exception:
             logger.exception("learnhermes tick failed")
-        await asyncio.sleep(_TICK_SECONDS)
+
+
+def _should_arm() -> bool:
+    """Never arm in a process LearnHermes itself spawned.
+
+    Any `hermes` CLI invocation discovers and loads plugins. A child that LearnHermes
+    spawned (`hermes send --list`, `hermes send`) must never arm: it would run its own
+    loop alongside the parent's. Ordinary short-lived commands may arm, but the first
+    tick waits a full interval, so they exit without ever ticking.
+    """
+    return os.environ.get(delivery.SUBPROCESS_ENV) != "1"
+
+
+def _start_loop(ctx, home: str) -> None:
+    """Arm the timing loop from ANY thread.
+
+    register() never runs with an asyncio loop on its own thread: in the default
+    in-process mode it runs on a plugin-load worker thread, and in the isolated
+    plugin host on the channel request thread. The old get_running_loop() guard
+    therefore skipped arming in both modes — after a gateway restart a quiet
+    profile never ticked again, which is exactly when dispatches should arrive.
+
+    ctx.spawn_task is tried first (the plugin host schedules it onto its own,
+    long-lived loop); in-process it needs a running loop and raises, so a plain
+    daemon thread runs the loop instead. That thread runs inside a copy of the
+    caller's contextvars, so the profile-home override (a contextvar) follows
+    it and state is written under the right profile. Unload sets the stop
+    event in both modes (host-spawned tasks are not auto-cancelled).
+    """
+    if not _should_arm():
+        return
+    with _LOOPS_LOCK:
+        stop = _LOOPS.get(home)
+        if stop is not None and not stop.is_set():
+            return
+        stop = threading.Event()
+        _LOOPS[home] = stop
+    name = f"learnhermes-timing-{Path(home).name}"
+    coro = _tick_loop(home, stop)
+    try:
+        ctx.spawn_task(coro, name=name)
+    except Exception:
+        coro.close()  # never awaited on this path
+        scoped = contextvars.copy_context()
+        threading.Thread(target=scoped.run, args=(_thread_loop, home, stop),
+                         daemon=True, name=name).start()
+
+
+async def _tick_loop(home: str, stop: threading.Event) -> None:
+    """The timing loop on the plugin host's own event loop (spawn_task path).
+
+    Same contract as _thread_loop: wait a full interval before each tick.
+    The wait is asyncio.sleep in short steps, not stop.wait on the default
+    executor: an executor thread parked for minutes would be joined at
+    interpreter exit and delay it. Only the tick itself (synchronous file
+    locks + hermes CLI subprocesses) runs off the loop, via to_thread.
+    """
+    while True:
+        deadline = time.monotonic() + _TICK_SECONDS
+        while not stop.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+        if stop.is_set():
+            return
+        try:
+            await asyncio.to_thread(_tick, home)
+        except Exception:
+            logger.exception("learnhermes tick failed")
 
 
 def _tick(home: str, force: bool = False) -> dict:
-    """One observe → select → maybe-deliver cycle. Returns a report dict."""
+    """One observe → select → maybe-deliver cycle. Returns a report dict.
+
+    Serialised across processes: the gateway and an open `hermes chat` on the
+    same profile can both run a timing loop, and select → send → record is not
+    atomic, so two ticks at once could deliver the same dispatch twice. A
+    non-blocking lock means the second tick simply skips this round.
+    """
+    fh = _try_tick_lock()
+    if fh is None:
+        return {"newly_achieved": [], "sent": None,
+                "reason": "another LearnHermes tick is running on this profile; try again shortly"}
+    try:
+        return _tick_locked(home, force)
+    finally:
+        _release_tick_lock(fh)
+
+
+def _try_tick_lock():
+    from plugins.plugin_storage import plugin_data_dir
+    path = plugin_data_dir("learnhermes") / "tick.lock"
+    fh = open(path, "a+")
+    try:
+        if learner.fcntl is not None:
+            learner.fcntl.flock(fh, learner.fcntl.LOCK_EX | learner.fcntl.LOCK_NB)
+        elif learner.msvcrt is not None:
+            fh.seek(0)
+            learner.msvcrt.locking(fh.fileno(), learner.msvcrt.LK_NBLCK, 1)
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
+def _release_tick_lock(fh) -> None:
+    try:
+        if learner.fcntl is not None:
+            learner.fcntl.flock(fh, learner.fcntl.LOCK_UN)
+        elif learner.msvcrt is not None:
+            fh.seek(0)
+            learner.msvcrt.locking(fh.fileno(), learner.msvcrt.LK_UNLCK, 1)
+    finally:
+        fh.close()
+
+
+def _tick_locked(home: str, force: bool) -> dict:
     _flush_buffers()
-    targets = delivery.list_targets(home)
-    model = learner.mutate(lambda m: m.update({"gateway_targets": targets}))
+    timing.settle_stale_sends()
+    listed = delivery.list_targets(home)
+    if listed is not None:
+        model = learner.mutate(lambda m: m.update({"gateway_targets": listed}))
+    else:
+        model = learner.load()  # listing failed: keep the last known targets
+    targets = model.get("gateway_targets", [])
     sessions_7d = observer.session_count_7d(home)
     learner.mutate(lambda m: m.update({"sessions_7d": sessions_7d}))
     results = observer.scan(home, model)
@@ -158,11 +280,36 @@ def _tick(home: str, force: bool = False) -> dict:
     if dispatch is None:
         report["reason"] = "nothing to send"
         return report
+    # A saved channel that is not a connected platform on THIS profile can
+    # never deliver (e.g. set by older code, or left behind after a platform
+    # disconnect). Surface the blocker instead of failing silently every
+    # tick — forced pings included, so the user gets the real reason.
+    channel = (model["settings"].get("channel") or "").strip()
+    if channel:
+        platform = channel.split(":")[0].strip().lower()
+        if listed is None:
+            report["reason"] = (
+                "couldn't list delivery platforms just now (`hermes send --list` failed); "
+                "will retry on the next tick"
+            )
+            return report
+        if platform not in targets:
+            report["reason"] = (
+                f"channel '{platform}' is not connected on this profile"
+                + (f" (detected: {', '.join(targets)})" if targets
+                   else " — no delivery platforms are connected yet")
+            )
+            return report
     ok, reason = timing.can_send(model, force=force)
     report["reason"] = reason
     if not ok:
         return report
     text = delivery.build_ping(dispatch, model["settings"]["dashboard_url"], home)
+    # At-most-once: mark the attempt before sending. If this process dies
+    # mid-send (gateway restart, a chat closing) the child may still deliver;
+    # the next tick then treats the stale marker as sent instead of sending
+    # again. Missing one nudge beats pinging the user twice.
+    timing.mark_sending(dispatch["id"])
     delivered, detail = delivery.send(
         model["settings"]["channel"], text, home, dispatch["id"]
     )
@@ -170,7 +317,12 @@ def _tick(home: str, force: bool = False) -> dict:
         timing.record_sent(dispatch["id"])
         report["sent"] = dispatch["id"]
         snapshot.write_snapshot(journey.build_journey(home))
+    elif delivered is None:
+        # Outcome unknown (send timed out): the child may still deliver. Keep
+        # the marker so it settles as sent (unconfirmed) — never resend.
+        report["reason"] = f"delivery outcome unknown, not retrying: {detail}"
     else:
+        timing.clear_sending(dispatch["id"])
         report["reason"] = f"delivery failed: {detail}"
     return report
 
@@ -214,6 +366,15 @@ def _handle_dispatches(ctx, home: str, raw_args: str) -> str:
         f"Channel: {s['channel'] or '(none — set one on the dashboard)'} | "
         f"pace: {timing.pace(model, model.get('sessions_7d', 0))}"
     )
+    channel = (s.get("channel") or "").strip()
+    known = model.get("gateway_targets", [])
+    if (channel and "gateway_targets" in model
+            and channel.split(":")[0].strip().lower() not in known):
+        lines.append(
+            f"Warning: channel '{channel}' is not connected on this profile "
+            f"(detected: {', '.join(known) or 'none'}) — pings can't be sent. "
+            "Pick a connected channel, or clear it for dashboard-only mode."
+        )
     lines.append(f"Dashboard: {s['dashboard_url']}")
     lines.append("Commands: /dispatches send | dismiss | scan")
     return "\n".join(lines)
@@ -242,7 +403,9 @@ def register(ctx):
     ctx.register_skill("journey", Path(__file__).parent / "skills" / "journey" / "SKILL.md")
 
     def _cleanup():
-        _LOOPS.pop(home, None)
+        stop = _LOOPS.pop(home, None)
+        if stop is not None:
+            stop.set()
         _LOOP_CTX.pop(home, None)
 
     ctx.on_unload(_cleanup)

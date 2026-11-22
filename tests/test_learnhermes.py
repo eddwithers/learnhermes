@@ -431,6 +431,7 @@ def test_status_surfaces_missing_channel_blocker(lh, home):
 def test_status_next_step_with_channel_and_current(lh, home):
     handler = lh.tools.make_handler(str(home), lh._tick)
     lh.learner.mutate(lambda m: m["settings"].update({"channel": "telegram"}))
+    lh.learner.mutate(lambda m: m.update({"gateway_targets": ["telegram"]}))
     out = json.loads(handler({"action": "status"}))
     assert "Current dispatch" in out["next_step"]
 
@@ -554,3 +555,633 @@ def test_welcome_never_consumed_by_automation(lh, home, monkeypatch):
     monkeypatch.delenv("HERMES_KANBAN_TASK")
     # the user's real first chat still gets it
     assert lh._on_pre_llm_call("s1", "hi", True, platform="cli") is not None
+
+
+# --- v0.1.3: timing-loop lifecycle ------------------------------------------
+# register() never runs with an asyncio loop on its own thread: in-process it
+# runs on a plugin-load worker thread, in the isolated host on the channel
+# request thread. The old get_running_loop() guard silently skipped arming in
+# both, so after a gateway restart a quiet profile (the exact dispatch
+# scenario) never ticked again until someone chatted. The loop must arm at
+# register time in every mode, and stop on unload.
+
+class _FakeCtx:
+    """Minimal plugin context. Default spawn_task is host-like: it schedules
+    onto its own loop from ANY thread (run_coroutine_threadsafe semantics)."""
+
+    def __init__(self, spawn=None):
+        self.spawned = []
+        self.unload_callbacks = []
+        self._spawn = spawn
+
+    def spawn_task(self, coro, *, name=None):
+        if self._spawn is not None:
+            return self._spawn(coro, name)
+        import asyncio
+        import threading
+        t = threading.Thread(target=asyncio.run, args=(coro,), daemon=True)
+        t.start()
+        self.spawned.append(name)
+        return t
+
+    def register_tool(self, **kw):
+        pass
+
+    def register_hook(self, *a, **kw):
+        pass
+
+    def register_command(self, *a, **kw):
+        pass
+
+    def register_skill(self, *a, **kw):
+        pass
+
+    def on_unload(self, cb):
+        self.unload_callbacks.append(cb)
+
+
+def _wait_for(predicate, timeout=2.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_loop_arms_via_spawn_task_without_running_loop(lh, home, monkeypatch):
+    calls = []
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: calls.append(h) or {})
+    monkeypatch.setattr(lh, "_TICK_SECONDS", 0.05)
+    monkeypatch.setattr(lh, "get_hermes_home", lambda: home)
+    ctx = _FakeCtx()
+    lh.register(ctx)
+    try:
+        assert ctx.spawned, "timing loop was not spawned at register time"
+        assert _wait_for(lambda: len(calls) >= 1), "loop spawned but never ticked"
+    finally:
+        for cb in ctx.unload_callbacks:
+            cb()
+    assert str(home) not in lh._LOOPS
+
+
+def test_loop_falls_back_to_thread_when_spawn_unavailable(lh, home, monkeypatch):
+    # In-process load with no running loop: spawn_task raises RuntimeError.
+    # The loop must still arm via the daemon-thread fallback.
+    calls = []
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: calls.append(h) or {})
+    monkeypatch.setattr(lh, "_TICK_SECONDS", 0.05)
+
+    def refuse(coro, name):
+        raise RuntimeError("no running event loop")
+
+    ctx = _FakeCtx(spawn=refuse)
+    lh._start_loop(ctx, str(home))
+    stop = None
+    try:
+        assert _wait_for(lambda: len(calls) >= 1), "thread fallback never ticked"
+        stop = lh._LOOPS.get(str(home))
+        assert stop is not None
+        # double-start is a no-op while the loop is live
+        lh._start_loop(ctx, str(home))
+        assert lh._LOOPS.get(str(home)) is stop
+    finally:
+        stop = lh._LOOPS.pop(str(home), None)
+        if stop is not None:
+            stop.set()
+
+
+def test_first_tick_waits_a_full_interval(lh, home, monkeypatch):
+    # A short-lived command must exit before its first tick. The loop waits
+    # an interval BEFORE ticking, never ticks on arming.
+    calls = []
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: calls.append(h) or {})
+    monkeypatch.setattr(lh, "_TICK_SECONDS", 0.4)
+
+    def refuse(coro, name):
+        raise RuntimeError("no running event loop")
+
+    lh._start_loop(_FakeCtx(spawn=refuse), str(home))
+    try:
+        time.sleep(0.15)
+        assert calls == [], "ticked immediately on arming"
+        assert _wait_for(lambda: len(calls) >= 1, timeout=2.0)
+    finally:
+        stop = lh._LOOPS.pop(str(home), None)
+        if stop is not None:
+            stop.set()
+
+
+def test_host_loop_first_tick_waits_too(lh, home, monkeypatch):
+    # Same contract on the spawn_task (plugin host) path. Generous margins:
+    # interval 1.0s, check at 0.3s, so a loaded machine can't flake it.
+    import asyncio
+    calls = []
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: calls.append(h) or {})
+    monkeypatch.setattr(lh, "_TICK_SECONDS", 1.0)
+    stop = __import__("threading").Event()
+
+    async def run():
+        task = asyncio.ensure_future(lh._tick_loop(str(home), stop))
+        await asyncio.sleep(0.3)
+        early = list(calls)
+        for _ in range(60):  # up to 6s for the first tick
+            if calls:
+                break
+            await asyncio.sleep(0.1)
+        stop.set()
+        await asyncio.wait_for(task, timeout=5)
+        return early
+
+    early = asyncio.run(run())
+    assert early == [] and len(calls) >= 1
+
+
+def test_host_loop_wait_does_not_park_an_executor_thread(lh, home, monkeypatch):
+    # The between-ticks wait must not sit in the default executor: interpreter
+    # exit joins those threads, so a parked one delays shutdown by the whole
+    # interval (seen with a 20s interval: exit took 20.9s).
+    import asyncio
+    import threading
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: {})
+    monkeypatch.setattr(lh, "_TICK_SECONDS", 30)
+    stop = threading.Event()
+
+    async def run():
+        task = asyncio.ensure_future(lh._tick_loop(str(home), stop))
+        await asyncio.sleep(0.3)
+        parked = [t.name for t in threading.enumerate() if t.name.startswith("asyncio_")]
+        stop.set()
+        await asyncio.wait_for(task, timeout=5)  # stop is honoured promptly
+        return parked
+
+    assert asyncio.run(run()) == []
+
+
+def test_unload_stops_the_loop(lh, home, monkeypatch):
+    calls = []
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: calls.append(h) or {})
+    monkeypatch.setattr(lh, "_TICK_SECONDS", 0.05)
+    monkeypatch.setattr(lh, "get_hermes_home", lambda: home)
+    ctx = _FakeCtx()
+    lh.register(ctx)
+    try:
+        assert _wait_for(lambda: len(calls) >= 1)
+    finally:
+        for cb in ctx.unload_callbacks:
+            cb()
+    assert str(home) not in lh._LOOPS
+    n = len(calls)
+    time.sleep(0.15)  # ~3 tick periods
+    assert len(calls) <= n + 1, "loop kept ticking after unload"
+
+
+# --- v0.1.3: saved-but-unconnected channel must surface, not stall ----------
+# A channel saved by older code (or left behind after a platform disconnect)
+# must not silently fail every tick: the tick reports the blocker, status
+# guides the user, and BOTH write paths (tool + dashboard) validate.
+
+def _ready_model(lh, channel, targets):
+    now = time.time()
+    lh.learner.mutate(lambda m: m.update({
+        "gateway_targets": targets,
+        "activity": {"last_activity": now - 3600, "active": False},
+    }))
+    lh.learner.mutate(lambda m: m["settings"].update({"channel": channel}))
+
+
+def test_tick_skips_unconnected_channel(lh, home, monkeypatch):
+    _ready_model(lh, "email", ["telegram"])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    sent = []
+    monkeypatch.setattr(lh.delivery, "send", lambda *a, **k: sent.append(a) or (True, ""))
+    report = lh._tick(str(home))
+    assert report["sent"] is None
+    assert "not connected" in report["reason"] and "email" in report["reason"]
+    assert not sent
+    assert not (home / "plugin-data" / "learnhermes" / "outbox.jsonl").exists()
+
+
+def test_tick_force_surfaces_unconnected_channel(lh, home, monkeypatch):
+    _ready_model(lh, "email", ["telegram"])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    sent = []
+    monkeypatch.setattr(lh.delivery, "send", lambda *a, **k: sent.append(a) or (True, ""))
+    report = lh._tick(str(home), force=True)
+    assert report["sent"] is None and "not connected" in report["reason"]
+    assert not sent
+
+
+def test_tick_unconnected_no_platforms_reason(lh, home, monkeypatch):
+    _ready_model(lh, "telegram", [])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: [])
+    report = lh._tick(str(home))
+    assert report["sent"] is None
+    assert "no delivery platforms" in report["reason"]
+
+
+def test_tick_connected_channel_still_delivers(lh, home, monkeypatch):
+    _ready_model(lh, "telegram", ["telegram"])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    sent = []
+    monkeypatch.setattr(lh.delivery, "send",
+                        lambda channel, text, h, did: sent.append((channel, did)) or (True, ""))
+    report = lh._tick(str(home), force=True)
+    assert report["sent"] is not None and sent
+    assert lh.learner.load()["dispatches"][report["sent"]]["state"] == "sent"
+
+
+def test_status_surfaces_unconnected_channel(lh, home):
+    _ready_model(lh, "email", ["telegram"])
+    handler = lh.tools.make_handler(str(home), lh._tick)
+    out = json.loads(handler({"action": "status"}))
+    assert "not connected" in out["next_step"]
+    assert "configure" in out["next_step"]
+
+
+def test_dashboard_settings_validates_channel(lh, home, monkeypatch):
+    from learnhermes.dashboard import plugin_api
+    monkeypatch.setattr(plugin_api, "get_hermes_home", lambda: home)
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    out = plugin_api.settings({"channel": "email"})
+    assert out["ok"] is False and "not a connected delivery platform" in out["error"]
+    assert lh.learner.load()["settings"]["channel"] == ""  # unchanged
+    ok = plugin_api.settings({"channel": "telegram"})
+    assert ok["ok"] is True
+    assert lh.learner.load()["settings"]["channel"] == "telegram"
+    cleared = plugin_api.settings({"channel": ""})
+    assert cleared["ok"] is True  # dashboard-only stays allowed
+
+
+def test_send_uses_json_and_records_the_real_error(lh, home, monkeypatch):
+    # --quiet suppressed the CLI's error text (that was the 'silent exit 1').
+    # send() must ask for --json and record the actual reason.
+    seen = {}
+
+    def fake_run(cmd, **k):
+        seen["cmd"] = cmd
+        seen["env"] = k.get("env", {})
+        out = json.dumps({"error": "Platform 'email' is not configured.",
+                          "warnings": ["no EMAIL_ADDRESS"]})
+        return type("P", (), {"returncode": 1, "stdout": out, "stderr": ""})()
+
+    monkeypatch.setattr(lh.delivery.subprocess, "run", fake_run)
+    ok, detail = lh.delivery.send("email", "hello", str(home), "memory")
+    assert not ok
+    assert "--json" in seen["cmd"] and "--quiet" not in seen["cmd"]
+    assert "Platform 'email' is not configured." in detail and "no EMAIL_ADDRESS" in detail
+    assert seen["env"].get(lh.delivery.SUBPROCESS_ENV) == "1"
+    rec = json.loads((home / "plugin-data" / "learnhermes" / "outbox.jsonl").read_text().strip())
+    assert rec["detail"] == detail
+
+
+def test_send_truly_silent_failure_is_honest(lh, home, monkeypatch):
+    monkeypatch.setattr(lh.delivery.subprocess, "run",
+                        lambda *a, **k: type("P", (), {"returncode": 1, "stdout": "", "stderr": ""})())
+    ok, detail = lh.delivery.send("email", "hello", str(home), "memory")
+    assert not ok and detail == "hermes send exited 1 with no output"  # no guessed cause
+
+
+# --- v0.1.3: list_targets reads JSON; a failed listing is "unknown" ---------
+
+def _proc(rc, out):
+    return type("P", (), {"returncode": rc, "stdout": out, "stderr": ""})()
+
+
+def test_list_targets_parses_json_including_empty_and_underscored(lh, home, monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **k):
+        seen["cmd"], seen["env"] = cmd, k.get("env", {})
+        return _proc(0, json.dumps({"platforms": {
+            "telegram": [{"id": "1"}],
+            "whatsapp_cloud": [],        # underscore — old scraper dropped it
+            "simplex": [],               # configured, no discovered channels — still a target
+        }}))
+
+    monkeypatch.setattr(lh.delivery.subprocess, "run", fake_run)
+    assert lh.delivery.list_targets(str(home)) == ["telegram", "whatsapp_cloud", "simplex"]
+    assert seen["cmd"][-2:] == ["--list", "--json"]
+    assert seen["env"].get(lh.delivery.SUBPROCESS_ENV) == "1"
+
+
+def test_list_targets_none_on_failure_not_empty(lh, home, monkeypatch):
+    import subprocess as sp
+    cases = [
+        lambda *a, **k: _proc(1, ""),                                   # CLI error
+        lambda *a, **k: _proc(0, "not json"),                           # unparseable
+        lambda *a, **k: _proc(0, json.dumps({"platforms": ["x"]})),     # wrong shape
+    ]
+    for fake in cases:
+        monkeypatch.setattr(lh.delivery.subprocess, "run", fake)
+        assert lh.delivery.list_targets(str(home)) is None
+
+    def timeout(*a, **k):
+        raise sp.TimeoutExpired(cmd="hermes", timeout=30)
+
+    monkeypatch.setattr(lh.delivery.subprocess, "run", timeout)
+    assert lh.delivery.list_targets(str(home)) is None
+    monkeypatch.setattr(lh.delivery.subprocess, "run", lambda *a, **k: _proc(0, '{"platforms": {}}'))
+    assert lh.delivery.list_targets(str(home)) == []  # genuinely none connected
+
+
+def test_tick_listing_failure_keeps_known_targets_and_does_not_block_as_none(lh, home, monkeypatch):
+    _ready_model(lh, "telegram", ["telegram"])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: None)
+    sent = []
+    monkeypatch.setattr(lh.delivery, "send", lambda *a, **k: sent.append(a) or (True, ""))
+    report = lh._tick(str(home), force=True)
+    assert report["sent"] is None and not sent
+    assert "couldn't list delivery platforms" in report["reason"]
+    assert "not connected" not in report["reason"]
+    assert lh.learner.load()["gateway_targets"] == ["telegram"]  # last known kept
+
+
+def test_validate_channel_listing_failure_is_not_none_connected(lh, home, monkeypatch):
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: None)
+    ok, msg = lh.delivery.validate_channel("telegram", str(home))
+    assert not ok and "Couldn't list" in msg and "No delivery platform is connected" not in msg
+
+
+def test_dispatches_status_warns_on_unconnected_channel(lh, home):
+    _ready_model(lh, "email", ["telegram"])
+    out = lh._handle_dispatches(None, str(home), "")
+    assert "Warning: channel 'email' is not connected" in out
+    _ready_model(lh, "telegram", ["telegram"])
+    assert "Warning" not in lh._handle_dispatches(None, str(home), "")
+
+
+# --- v0.1.3: no self-spawning process chain --------------------------------
+
+def test_subprocess_marker_blocks_arming(lh, home, monkeypatch):
+    monkeypatch.setenv(lh.delivery.SUBPROCESS_ENV, "1")
+    ctx = _FakeCtx()
+    lh._start_loop(ctx, str(home))
+    assert not ctx.spawned and str(home) not in lh._LOOPS
+
+
+def test_start_loop_is_race_free(lh, home, monkeypatch):
+    # register() and a session-start hook on another thread must not double-arm.
+    import threading
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: {})
+    monkeypatch.setattr(lh, "_TICK_SECONDS", 0.05)
+    ctx = _FakeCtx()
+    barrier = threading.Barrier(8)
+
+    def go():
+        barrier.wait()
+        lh._start_loop(ctx, str(home))
+
+    threads = [threading.Thread(target=go) for _ in range(8)]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(ctx.spawned) == 1
+    finally:
+        stop = lh._LOOPS.pop(str(home), None)
+        if stop is not None:
+            stop.set()
+
+
+def test_fallback_thread_keeps_profile_scope(lh, home, monkeypatch):
+    # The profile-home override is a contextvar; a bare Thread starts with an
+    # empty context and would tick against the process home instead.
+    import contextvars
+    scope = contextvars.ContextVar("lh_test_scope", default="process-home")
+    seen = []
+    monkeypatch.setattr(lh, "_tick", lambda h, force=False: seen.append(scope.get()) or {})
+    monkeypatch.setattr(lh, "_TICK_SECONDS", 0.05)
+
+    def refuse(coro, name):
+        raise RuntimeError("no running event loop")
+
+    token = scope.set("profile-pb")
+    try:
+        lh._start_loop(_FakeCtx(spawn=refuse), str(home))
+    finally:
+        scope.reset(token)
+    try:
+        assert _wait_for(lambda: len(seen) >= 1)
+        assert seen[0] == "profile-pb"
+    finally:
+        stop = lh._LOOPS.pop(str(home), None)
+        if stop is not None:
+            stop.set()
+
+
+def _run_register_child(home, tmp_path, *, marker: bool, linger: float = 0.0):
+    """Run register() in a real separate python process (not the real hermes
+    CLI or plugin loader) and report what it armed and how long exit took.
+    `linger` keeps the child alive after register(), like a real command
+    doing its work (real `hermes` commands take 1-2s)."""
+    import os
+    import subprocess
+    import learnhermes.delivery as delivery
+    script = tmp_path / "child.py"
+    script.write_text(
+        "import sys, threading, time\n"
+        f"sys.path[:0] = [{str(PLUGIN_ROOT.parent)!r}, {str(Path(__import__('hermes_constants').__file__).parent)!r}]\n"
+        "import learnhermes as lh\n"
+        "class Ctx:\n"
+        "    def __getattr__(self, n):\n"
+        "        return lambda *a, **k: None\n"
+        "    def spawn_task(self, coro, name=None):\n"
+        "        raise RuntimeError('no running event loop')\n"
+        "lh.register(Ctx())\n"
+        "print('armed' if lh._LOOPS else 'not-armed')\n"
+        "print(len([t for t in threading.enumerate() if t.name.startswith('learnhermes-timing')]), flush=True)\n"
+        f"time.sleep({linger!r})\n"
+    )
+    env = {**os.environ, "HERMES_HOME": str(home)}
+    env.pop(delivery.SUBPROCESS_ENV, None)
+    if marker:
+        env[delivery.SUBPROCESS_ENV] = "1"
+    started = time.time()
+    out = subprocess.run([sys.executable, str(script)], env=env,
+                         capture_output=True, text=True, timeout=60)
+    return out, time.time() - started
+
+
+def test_marked_child_process_does_not_arm(home, tmp_path):
+    # A real child process carrying the marker runs register() but must not arm.
+    out, _ = _run_register_child(home, tmp_path, marker=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == ["not-armed", "0"]
+    assert not (home / "plugin-data" / "learnhermes" / "learner.json").exists()
+
+
+def test_short_lived_unmarked_process_exits_promptly_and_never_ticks(home, tmp_path):
+    # An ordinary short-lived command (no marker) arms, but must never tick
+    # while it does its work, and must exit as soon as it's done (no hang on
+    # interpreter shutdown): no scan, no send, no state written. The child
+    # lingers 3s — longer than a real command — so an immediate first tick
+    # would have time to write learner.json.
+    out, elapsed = _run_register_child(home, tmp_path, marker=False, linger=3.0)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == ["armed", "1"]
+    assert elapsed < 15, f"process took {elapsed:.1f}s to exit"
+    data = home / "plugin-data" / "learnhermes"
+    assert not (data / "learner.json").exists(), "a short-lived process ticked"
+    assert not (data / "outbox.jsonl").exists()
+
+
+# --- v0.1.3: at-most-once delivery across process death ---------------------
+
+def test_interrupted_send_is_settled_as_sent_not_resent(lh, home, monkeypatch):
+    # A process died mid-send: the marker remains. The child may have
+    # delivered, so the next tick must not send the same dispatch again.
+    _ready_model(lh, "telegram", ["telegram"])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    sent = []
+    monkeypatch.setattr(lh.delivery, "send", lambda *a, **k: sent.append(a[3]) or (True, ""))
+    first = lh.timing.select(lh.timing.load_catalogue(), lh.learner.load())
+    lh.timing.mark_sending(first["id"], now=time.time() - lh.timing.SENDING_STALE_SECONDS - 5)
+    report = lh._tick(str(home), force=True)
+    assert first["id"] not in sent
+    d = lh.learner.load()["dispatches"][first["id"]]
+    assert d["state"] == "sent" and d.get("unconfirmed") is True
+    assert report["sent"] is None  # an open (sent) dispatch blocks the next one
+
+
+def test_live_send_marker_blocks_a_concurrent_send(lh, home, monkeypatch):
+    # A fresh marker (another process is mid-send) is NOT stale: hold off.
+    _ready_model(lh, "telegram", ["telegram"])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    sent = []
+    monkeypatch.setattr(lh.delivery, "send", lambda *a, **k: sent.append(a[3]) or (True, ""))
+    first = lh.timing.select(lh.timing.load_catalogue(), lh.learner.load())
+    lh.timing.mark_sending(first["id"])
+    report = lh._tick(str(home), force=True)
+    assert sent == [] and report["sent"] is None
+    assert lh.learner.load()["dispatches"][first["id"]]["state"] == "sending"
+
+
+def test_failed_send_clears_the_marker(lh, home, monkeypatch):
+    # The attempt is marked "sending" while the send runs, and a failure
+    # clears it so the dispatch stays retryable rather than stuck.
+    _ready_model(lh, "telegram", ["telegram"])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    during = {}
+
+    def failing_send(channel, text, h, did):
+        during[did] = lh.learner.load()["dispatches"].get(did, {}).get("state")
+        return False, "bot blocked"
+
+    monkeypatch.setattr(lh.delivery, "send", failing_send)
+    report = lh._tick(str(home), force=True)
+    assert report["sent"] is None and "bot blocked" in report["reason"]
+    assert list(during.values()) == ["sending"]  # marked before the send
+    assert lh.learner.load()["dispatches"] == {}  # cleared after the failure
+
+
+def test_send_timeout_is_unknown_and_never_resent(lh, home, monkeypatch):
+    # A send that times out may still deliver (the child keeps running). The
+    # outcome is unknown: the marker must stay, so it settles as sent instead
+    # of being retried into a duplicate.
+    import subprocess as sp
+
+    def slow(*a, **k):
+        raise sp.TimeoutExpired(cmd="hermes", timeout=45)
+
+    monkeypatch.setattr(lh.delivery.subprocess, "run", slow)
+    ok, detail = lh.delivery.send("telegram", "hi", str(home), "memory")
+    assert ok is None and "may still have been delivered" in detail
+
+    _ready_model(lh, "telegram", ["telegram"])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    monkeypatch.setattr(lh.delivery, "send", lambda *a, **k: (None, "timed out"))
+    report = lh._tick(str(home), force=True)
+    did = next(iter(lh.learner.load()["dispatches"]))
+    assert "outcome unknown, not retrying" in report["reason"]
+    assert lh.learner.load()["dispatches"][did]["state"] == "sending"  # kept, not cleared
+
+    sent = []
+    monkeypatch.setattr(lh.delivery, "send", lambda *a, **k: sent.append(a[3]) or (True, ""))
+    later = time.time() + lh.timing.SENDING_STALE_SECONDS + 5
+    monkeypatch.setattr(lh.timing.time, "time", lambda: later)
+    lh._tick(str(home), force=True)
+    assert did not in sent  # never resent
+    assert lh.learner.load()["dispatches"][did]["state"] == "sent"
+
+
+def test_settled_send_counts_toward_daily_cap(lh, home):
+    now = time.time()
+    lh.timing.mark_sending("memory", now=now - lh.timing.SENDING_STALE_SECONDS - 5)
+    lh.timing.settle_stale_sends(now=now)
+    m = lh.learner.load()
+    assert m["sent_today"]["count"] == 1
+    assert m["dispatches"]["memory"]["unconfirmed"] is True
+
+
+def test_never_listed_targets_say_not_checked_not_none(lh, home):
+    # Before any successful listing, no surface may say "none detected".
+    j = lh.journey.build_journey(str(home))
+    assert j["targets_known"] is False
+    html = lh.snapshot.render_html(j)
+    assert "none detected" not in html and "not checked yet" in html
+    handler = lh.tools.make_handler(str(home), lh._tick)
+    out = json.loads(handler({"action": "status"}))
+    assert out["detected_platforms_known"] is False
+    assert "none detected" not in out["next_step"] and "not checked yet" in out["next_step"]
+    lh.learner.mutate(lambda m: m.update({"gateway_targets": []}))  # listed: genuinely none
+    out = json.loads(handler({"action": "status"}))
+    assert out["detected_platforms_known"] is True and "none detected" in out["next_step"]
+
+
+def test_never_listed_targets_are_unknown_not_unconnected(lh, home):
+    # No successful listing yet: surfaces must not claim "not connected".
+    lh.learner.mutate(lambda m: m["settings"].update({"channel": "telegram"}))
+    assert "gateway_targets" not in lh.learner.load()
+    j = lh.journey.build_journey(str(home))
+    assert j["targets_known"] is False
+    assert "not connected" not in lh.snapshot.render_html(j)
+    assert "Warning" not in lh._handle_dispatches(None, str(home), "")
+    handler = lh.tools.make_handler(str(home), lh._tick)
+    out = json.loads(handler({"action": "status"}))
+    assert "not connected" not in out["next_step"]
+
+
+def test_tick_is_serialised_across_processes(lh, home, monkeypatch):
+    # Two processes ticking the same profile at once must not both deliver.
+    # A real second process holds the tick lock; this tick must skip, not send.
+    import os
+    import subprocess
+    sent = []
+    _ready_model(lh, "telegram", ["telegram"])
+    monkeypatch.setattr(lh.delivery, "list_targets", lambda h: ["telegram"])
+    monkeypatch.setattr(lh.delivery, "send", lambda *a, **k: sent.append(a) or (True, ""))
+    lock = home / "plugin-data" / "learnhermes" / "tick.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import fcntl, sys, time\n"
+         f"fh = open({str(lock)!r}, 'a+')\n"
+         "fcntl.flock(fh, fcntl.LOCK_EX)\n"
+         "print('held', flush=True)\n"
+         "time.sleep(30)\n"],
+        stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        report = lh._tick(str(home), force=True)
+        assert report["sent"] is None and not sent
+        assert "another LearnHermes tick is running" in report["reason"]
+    finally:
+        holder.kill()
+        holder.wait()
+    report = lh._tick(str(home), force=True)  # lock released -> delivers
+    assert report["sent"] is not None and len(sent) == 1
+
+
+def test_snapshot_warns_on_unconnected_channel(lh, home):
+    _ready_model(lh, "email", ["telegram"])
+    j = lh.journey.build_journey(str(home))
+    assert "not connected" in lh.snapshot.render_html(j)
+    _ready_model(lh, "telegram", ["telegram"])
+    j = lh.journey.build_journey(str(home))
+    assert "not connected" not in lh.snapshot.render_html(j)
+    _ready_model(lh, "", ["telegram"])
+    j = lh.journey.build_journey(str(home))
+    assert "not connected" not in lh.snapshot.render_html(j)

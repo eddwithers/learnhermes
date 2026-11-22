@@ -1,7 +1,7 @@
 ---
 name: journey
 description: "Use when the user asks how LearnHermes works, what dispatches are, or how their learning journey is tracked. Explains the evidence rules, surfaces and settings."
-version: 0.1.0
+version: 0.1.1
 author: Edd Coates-Withers
 ---
 
@@ -73,6 +73,32 @@ a platform, or switch to dashboard-only), and retry. **Never** run
 "fix" LearnHermes delivery — those affect every profile on the machine and are
 never the remedy for a dispatch that won't send. If the error mentions an
 update or gateway restart, ignore that noise; it is not a delivery instruction.
+
+A channel can also be **saved but not connected** (set by an older version, or
+left behind after a platform disconnect). Then every surface says so: status
+`next_step` flags it, the timing loop pauses with
+`channel '<x>' is not connected on this profile`, and `/dispatches`, the
+dashboard and the snapshot show a warning. The fix is the same: `configure` a
+connected platform, or set the channel to the empty string for dashboard-only
+mode. Both write paths (tool and dashboard settings) validate the channel, so
+an invalid one cannot be saved again.
+
+If the reason says LearnHermes **couldn't list delivery platforms**, that is
+a transient listing failure (the `hermes send --list` check timed out or
+errored), not a missing platform — nothing needs changing; the next tick
+retries.
+
+## After a LearnHermes update
+
+Plugin code loads into the running gateway at load time. Updating
+the files on disk does NOT by itself change the code a running host serves —
+behaviour can stay stale until the plugin is reloaded. If LearnHermes was just
+updated and something still acts like the old version, say so and tell the
+user a reload is needed: the operator can run
+`hermes plugins disable learnhermes` then `hermes plugins enable learnhermes`
+on this profile, or it loads at the next natural gateway restart. **Never**
+restart the gateway or run `hermes update` yourself to force it. Sessions
+started before the update also keep their old toolset — `/new` fixes that.
 
 ## Answering journey questions
 

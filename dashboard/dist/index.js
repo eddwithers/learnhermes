@@ -23,7 +23,7 @@
     );
   }
 
-  function CurrentDispatch({ d, hasChannel, onDismiss, onSend, busy }) {
+  function CurrentDispatch({ d, channelWarning, channel, targets, onDismiss, onSend, busy }) {
     if (!d) return null;
     return h(Card, { className: "border-ring" },
       h(CardHeader, null,
@@ -33,8 +33,11 @@
         ),
       ),
       h(CardContent, { className: "space-y-3" },
-        !hasChannel ? h("p", { className: "text-xs rounded-md p-2 border border-border bg-muted text-muted-foreground" },
+        channelWarning === "unset" ? h("p", { className: "text-xs rounded-md p-2 border border-border bg-muted text-muted-foreground" },
           "No delivery channel is set, so pings can't be sent yet. Pick a channel in Dispatch settings below — or ask Hermes in chat where dispatches should go.") : null,
+        channelWarning === "unconnected" ? h("p", { className: "text-xs rounded-md p-2 border border-border bg-muted text-muted-foreground" },
+          "Channel '" + channel + "' is not connected on this profile, so pings can't be sent. Detected platforms: " +
+          ((targets || []).join(", ") || "none") + ". Pick a connected channel in Dispatch settings below — or clear it for dashboard-only mode.") : null,
         h("p", { className: "text-sm text-muted-foreground" }, d.why),
         h("div", null,
           h(Label, { className: "text-xs" }, "Starter prompt — paste this to Hermes"),
@@ -52,7 +55,7 @@
     );
   }
 
-  function Settings({ settings, targets, onSave, busy }) {
+  function Settings({ settings, targets, targetsKnown, onSave, busy }) {
     const [form, setForm] = useState(settings);
     useEffect(() => setForm(settings), [settings]);
     const set = (k) => (e) => {
@@ -78,7 +81,8 @@
           h(Label, { className: "text-xs" }, "Channel (any hermes send target: telegram, discord:#channel, push, email...)"),
           h(Input, { value: form.channel || "", onChange: set("channel"), placeholder: "telegram", className: "mt-1" }),
           h("p", { className: "text-xs text-muted-foreground mt-1" },
-            "Detected platforms: " + ((targets && targets.length && targets.join(", ")) || "none")),
+            "Detected platforms: " + (targetsKnown === false ? "not checked yet"
+              : ((targets && targets.length && targets.join(", ")) || "none"))),
         ),
         h("div", null,
           h(Label, { className: "text-xs" }, "Dashboard link sent in pings (use a reachable address for phone)"),
@@ -131,7 +135,15 @@
       error ? h("div", { className: "text-xs text-destructive" }, error) : null,
       h(CurrentDispatch, {
         d: data.current,
-        hasChannel: !!(data.settings.channel && data.settings.channel.trim()),
+        channelWarning: (() => {
+          const ch = String(data.settings.channel || "").trim();
+          if (!ch) return "unset";
+          if (data.targets_known === false) return null;  // never listed yet: unknown, not unconnected
+          const platform = ch.split(":")[0].toLowerCase();
+          return (data.gateway_targets || []).indexOf(platform) === -1 ? "unconnected" : null;
+        })(),
+        channel: String(data.settings.channel || "").trim(),
+        targets: data.gateway_targets || [],
         busy: busy,
         onDismiss: () => data.current && act("/dispatch/" + data.current.id + "/dismiss"),
         onSend: () => act("/send-now"),
@@ -140,7 +152,7 @@
         h(CardHeader, null, h(CardTitle, { className: "text-base" }, "The journey")),
         h(CardContent, null, data.dispatches.map((d) => h(JourneyRow, { key: d.id, d: d }))),
       ),
-      h(Settings, { settings: data.settings, targets: data.gateway_targets, busy: busy, onSave: (s) => act("/settings", s) }),
+      h(Settings, { settings: data.settings, targets: data.gateway_targets, targetsKnown: data.targets_known, busy: busy, onSave: (s) => act("/settings", s) }),
       h("p", { className: "text-xs text-muted-foreground" },
         "Milestones are verified from real state: cron jobs, skills, profiles, sessions. " +
         "Dispatches wait for natural pauses — never mid-task."),

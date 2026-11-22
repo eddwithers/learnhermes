@@ -93,6 +93,17 @@ def _clean_detail(raw: str) -> str:
     return "\n".join(lines).strip()[:300]
 
 
+# Marks every `hermes` subprocess LearnHermes spawns. That CLI discovers and
+# loads plugins, including this one; a child that armed its own timing loop
+# would tick, spawn another `hermes send --list`, and so on — a
+# self-perpetuating process chain. register() refuses to arm when this is set.
+SUBPROCESS_ENV = "LEARNHERMES_SUBPROCESS"
+
+
+def _child_env(home: str) -> dict:
+    return {**os.environ, "HERMES_HOME": str(home), SUBPROCESS_ENV: "1"}
+
+
 def validate_channel(channel: str, home: str) -> tuple[bool, str]:
     """A channel must be a real, connected `hermes send` platform on THIS
     profile. Empty = dashboard-only mode (valid). Prevents invented targets
@@ -102,6 +113,12 @@ def validate_channel(channel: str, home: str) -> tuple[bool, str]:
         return True, ""
     platform = channel.split(":")[0].strip().lower()
     detected = list_targets(home)
+    if detected is None:
+        return False, (
+            "Couldn't list this profile's delivery platforms just now (`hermes send --list` "
+            "failed), so the channel can't be checked. Try again in a moment, or leave the "
+            "channel unset for dashboard-only mode."
+        )
     if not detected:
         return False, (
             "No delivery platform is connected on this profile yet, so pings can't be sent. "
@@ -117,9 +134,30 @@ def validate_channel(channel: str, home: str) -> tuple[bool, str]:
     return True, ""
 
 
-def send(channel: str, text: str, home: str, dispatch_id: str) -> tuple[bool, str]:
-    """Send via hermes send. Always records to the outbox, send or no send."""
-    env = {**os.environ, "HERMES_HOME": str(home)}
+def _send_error(stdout: str) -> str:
+    """The real reason from `hermes send --json`: its error plus any warnings
+    (the cause behind an error). '' when the output isn't the JSON shape."""
+    try:
+        payload = json.loads(stdout or "")
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    parts = [str(w) for w in payload.get("warnings") or ()]
+    if payload.get("error"):
+        parts.insert(0, str(payload["error"]))
+    return "\n".join(parts)
+
+
+def send(channel: str, text: str, home: str, dispatch_id: str) -> tuple[bool | None, str]:
+    """Send via hermes send. Always records to the outbox, send or no send.
+
+    Returns (True, "") on delivery, (False, reason) on a definite failure, and
+    (None, reason) when the outcome is unknown — the CLI timed out, so the
+    child may still deliver. Callers must not retry an unknown outcome.
+
+    Uses --json, never --quiet: --quiet suppresses the CLI's error text, which
+    is what made failures look 'silent'."""
     record = {
         "ts": time.time(),
         "dispatch_id": dispatch_id,
@@ -128,44 +166,51 @@ def send(channel: str, text: str, home: str, dispatch_id: str) -> tuple[bool, st
         "delivered": False,
         "detail": "",
     }
+    outcome: bool | None = False
     try:
         proc = subprocess.run(
-            _hermes_cmd() + ["send", "--to", channel, "--quiet", text],
-            env=env, capture_output=True, text=True, timeout=45,
+            _hermes_cmd() + ["send", "--to", channel, "--json", text],
+            env=_child_env(home), capture_output=True, text=True, timeout=45,
         )
-        record["delivered"] = proc.returncode == 0
-        record["detail"] = _clean_detail(proc.stderr or proc.stdout or "")
-        if not record["delivered"] and not record["detail"]:
-            record["detail"] = "delivery failed (no specific error returned)"
-    except (subprocess.TimeoutExpired, OSError) as exc:
+        record["delivered"] = outcome = proc.returncode == 0
+        if not record["delivered"]:
+            raw = _send_error(proc.stdout) or proc.stderr or proc.stdout or ""
+            record["detail"] = _clean_detail(raw) or (
+                f"hermes send exited {proc.returncode} with no output"
+            )
+    except subprocess.TimeoutExpired:
+        outcome = None
+        record["delivered"] = None
+        record["detail"] = "hermes send timed out after 45s; the message may still have been delivered"
+    except OSError as exc:
         record["detail"] = str(exc)[:300]
     _outbox_append(record)
-    return record["delivered"], record["detail"]
+    return outcome, record["detail"]
 
 
-def list_targets(home: str) -> list[str]:
-    """Configured delivery platforms, via Hermes's own CLI (no .env reads here).
+def list_targets(home: str) -> list[str] | None:
+    """Delivery platforms configured on this profile, via Hermes's own CLI
+    (no .env reads here): the keys of `hermes send --list --json`.
 
-    `hermes send --list` prints non-indented section headers and indented
-    target lines. We only need which platforms exist, deduplicated.
+    Returns None when the listing itself fails (timeout, missing CLI,
+    non-zero exit, unparseable output) — that is "unknown", never "none
+    connected". A configured platform with no discovered channels is still
+    listed (Hermes treats it as a valid send target), and platform names
+    with underscores (whatsapp_cloud, ...) are kept as-is.
     """
-    env = {**os.environ, "HERMES_HOME": str(home)}
     try:
         proc = subprocess.run(
-            _hermes_cmd() + ["send", "--list"],
-            env=env, capture_output=True, text=True, timeout=30,
+            _hermes_cmd() + ["send", "--list", "--json"],
+            env=_child_env(home), capture_output=True, text=True, timeout=30,
         )
     except (subprocess.TimeoutExpired, OSError):
-        return []
-    platforms: list[str] = []
-    for raw in (proc.stdout or "").splitlines():
-        if not raw.startswith((" ", "\t")):
-            continue
-        line = raw.strip()
-        if not line:
-            continue
-        platform = line.split()[0].split(":")[0]
-        if platform.isalpha() and platform.islower() and len(platform) < 20:
-            if platform not in platforms:
-                platforms.append(platform)
-    return platforms
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        platforms = json.loads(proc.stdout or "").get("platforms")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(platforms, dict):
+        return None
+    return [str(name).strip().lower() for name in platforms if str(name).strip()]
