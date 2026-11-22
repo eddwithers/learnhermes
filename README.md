@@ -2,7 +2,7 @@
 
 <p align="center"><img src="docs/brand-card.png" alt="LearnHermes — from install to power user" width="800"></p>
 
-> **Beta — v0.1.3-beta.** Verified on macOS: 87 behaviour tests, `hermes plugins validate` + `doctor`, and real-CLI runs on a scratch profile (no stray processes, no ticks from short-lived commands). Earlier betas were also checked live for the wizard, milestone verification, dashboard and delivery. Windows is not yet tested. **Beta testers wanted** — see the pinned issue.
+> **Beta — v0.1.3-beta.** Verified on macOS: 89 behaviour tests, `hermes plugins validate` + `doctor`, and real-CLI runs on a scratch profile (no stray processes, no ticks from short-lived commands). Earlier betas were also checked live for the wizard, milestone verification, dashboard and delivery. Windows is not yet tested. **Beta testers wanted** — see the pinned issue.
 
 A companion for the Hermes journey. LearnHermes watches how you actually use
 [Hermes Agent](https://github.com/NousResearch/hermes-agent), verifies your
@@ -107,7 +107,7 @@ hermes plugins doctor . --ci       # real discovery + register(ctx)
 scripts/run_tests.sh /absolute/path/to/learnhermes/tests -q
 ```
 
-87 deterministic behaviour tests: milestone evidence, timing rules, send
+89 deterministic behaviour tests: milestone evidence, timing rules, send
 window wraparound, settings migration, state recovery (bad JSON, wrong
 shape, invalid UTF-8), delivery outbox + infra-noise filtering, channel
 validation on both write paths (tool + dashboard), unconnected-channel
@@ -124,7 +124,8 @@ and never ticks — both in a real separate Python process, not the real
 `hermes` CLI), at-most-once delivery when a process dies mid-send or a
 send times out, cross-process tick serialisation, snapshot escaping,
 profile-scoped links, the conversational tool (blocker-surfacing status,
-scoped dashboard link, send-now error mapping), one-time welcome and its
+scoped dashboard link, send-now error mapping), child processes that never inherit another
+profile's credentials, one-time welcome and its
 automation gates.
 
 ## Roadmap

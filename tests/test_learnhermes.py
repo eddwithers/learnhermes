@@ -1175,6 +1175,39 @@ def test_tick_is_serialised_across_processes(lh, home, monkeypatch):
     assert report["sent"] is not None and len(sent) == 1
 
 
+def test_child_env_never_carries_another_profiles_credentials(lh, home, monkeypatch):
+    # Inside a multiplexed gateway os.environ holds the LAUNCH profile's
+    # platform tokens. A child `hermes` for another profile must not see them,
+    # or it lists — and sends through — the wrong profile's bots.
+    for k in ("TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN", "OPENROUTER_API_KEY",
+              "NOUS_API_KEY", "EMAIL_PASSWORD", "BWS_ACCESS_TOKEN"):
+        monkeypatch.setenv(k, "launch-profile-secret")
+    monkeypatch.setenv("HERMES_HOME", "/somewhere/launch-profile")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+    env = lh.delivery._child_env(str(home))
+    assert "launch-profile-secret" not in env.values()
+    assert env["HERMES_HOME"] == str(home)
+    assert env[lh.delivery.SUBPROCESS_ENV] == "1"
+    assert env["PATH"] == "/usr/bin:/bin" and env["HTTPS_PROXY"] == "http://proxy:3128"
+
+
+def test_list_and_send_use_the_scrubbed_env(lh, home, monkeypatch):
+    # Both spawn sites, not just the helper.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "launch-profile-secret")
+    envs = []
+
+    def fake_run(cmd, **k):
+        envs.append(k["env"])
+        return _proc(0, json.dumps({"platforms": {}}) if "--list" in cmd else json.dumps({"success": True}))
+
+    monkeypatch.setattr(lh.delivery.subprocess, "run", fake_run)
+    lh.delivery.list_targets(str(home))
+    lh.delivery.send("telegram", "hi", str(home), "memory")
+    assert len(envs) == 2
+    assert all("TELEGRAM_BOT_TOKEN" not in e for e in envs)
+
+
 def test_snapshot_warns_on_unconnected_channel(lh, home):
     _ready_model(lh, "email", ["telegram"])
     j = lh.journey.build_journey(str(home))

@@ -99,9 +99,26 @@ def _clean_detail(raw: str) -> str:
 # self-perpetuating process chain. register() refuses to arm when this is set.
 SUBPROCESS_ENV = "LEARNHERMES_SUBPROCESS"
 
+# The ONLY parent variables a child `hermes` inherits. Everything else —
+# above all platform tokens — must come from the target profile's own .env
+# and config, which `hermes send` loads itself from HERMES_HOME. A
+# multiplexed gateway's environment carries the LAUNCH profile's credentials
+# (TELEGRAM_BOT_TOKEN, ...); passing them through made a profile with no
+# platforms report, and send through, another profile's bots.
+_INHERITED_ENV = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM", "TZ",
+    "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    "SYSTEMROOT", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+)
+
 
 def _child_env(home: str) -> dict:
-    return {**os.environ, "HERMES_HOME": str(home), SUBPROCESS_ENV: "1"}
+    env = {k: os.environ[k] for k in _INHERITED_ENV if k in os.environ}
+    env["HERMES_HOME"] = str(home)
+    env[SUBPROCESS_ENV] = "1"
+    return env
 
 
 def validate_channel(channel: str, home: str) -> tuple[bool, str]:
