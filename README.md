@@ -34,7 +34,7 @@ to you, and it knows your setup.
 ## Install
 
 ```bash
-hermes plugins install eddwithers/learnhermes --ref c216f07e2a9de22062dacec0631f828cd9315043 --no-enable
+hermes plugins install eddwithers/learnhermes --ref 300d4f92ce732e6ca1ed5f388b35082c5d168380 --no-enable
 hermes plugins enable learnhermes
 ```
 
