@@ -88,6 +88,12 @@ a transient listing failure (the `hermes send --list` check timed out or
 errored), not a missing platform — nothing needs changing; the next tick
 retries.
 
+If the user is sure a platform is connected but LearnHermes says it isn't,
+check where its bot token lives: LearnHermes only sees credentials in the
+profile's own `.env` or `config.yaml`, not ones injected through the process
+environment (Docker, systemd, launchd). Moving the token into the profile's
+`.env` fixes it. Don't work around it by changing how the gateway starts.
+
 ## After a LearnHermes update
 
 Plugin code loads into the running gateway at load time. Updating

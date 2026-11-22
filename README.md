@@ -86,10 +86,23 @@ rides your existing Hermes email route (your SMTP, your From). No route
 configured? The plugin tells you, and setting one up can itself become a
 dispatch. Email is one-way — replies are never parsed.
 
+**Platform credentials must live in the profile itself.** LearnHermes runs
+`hermes send` for the profile it belongs to and passes it only basic system
+settings (PATH, locale, proxy/CA variables) — never the gateway's own
+environment, which on a multi-profile gateway holds another profile's bot
+tokens. So the bot token for your chosen channel must be in that profile's
+`.env` or `config.yaml`. A token supplied only through the process
+environment (Docker `-e`, systemd, launchd) is not seen, and the channel
+shows as not connected — nothing is sent through the wrong bot.
+
 ## Privacy & safety
 
 - Observation is **local-only**. No telemetry, no network calls except the
   delivery you configure.
+- **Profiles stay separate.** Child `hermes` commands never inherit the
+  gateway's environment, so one profile can't see or send through another
+  profile's platforms. (Before v0.1.3 they did — see the v0.1.3-beta release
+  notes.)
 - **Prompt caching is untouched**: the one-time welcome is appended to the
   user message at API time, never the system prompt; nothing is persisted
   into transcripts.
